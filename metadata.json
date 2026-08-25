@@ -1,0 +1,6 @@
+{
+  "name": "Amerj Sir Institute",
+  "description": "Premier NEET and JEE Biology online mock tests, practice series, detailed solutions, and performance analytics.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
