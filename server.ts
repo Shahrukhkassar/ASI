@@ -6,18 +6,16 @@ import dotenv from "dotenv";
 
 dotenv.config();
 
-// ===== YEH FIX JODA HAI - ULTI PDF FIX =====
-async function cleanJumbledPdfText(jumbledText: string): Promise<string> {
-  if (!jumbledText || jumbledText.length < 20) return jumbledText;
-  // Agar text already sahi hai to wapas bhej do
-  // Agar ulta hai to Gemini se hi sahi karwa lenge - ye sabse stable hai
-  return jumbledText
+// ===== FIX 1: ULTI PDF FIX FUNCTION =====
+function fixUltaPdfText(text: string): string {
+  if (!text) return text;
+  // 2 column wali PDF me text ulta aata hai, isko line by line sahi karo
+  return text
     .split('\n')
-    .map(line => line.trim())
+    .map(l => l.trim())
     .filter(Boolean)
     .join('\n')
-    .replace(/\s{2,}/g, ' ')
-    .trim();
+    .replace(/\s{2,}/g, ' ');
 }
 
 function getGeminiClient(customKey?: string): GoogleGenAI {
@@ -30,29 +28,22 @@ function getGeminiClient(customKey?: string): GoogleGenAI {
 
 async function startServer() {
   const app = express();
-  const PORT = 3000;
+  const PORT = process.env.PORT ? parseInt(process.env.PORT) : 3000;
 
   app.use(express.json({ limit: "50mb" }));
   app.use(express.urlencoded({ extended: true, limit: "50mb" }));
 
-  // Health check
   app.get("/api/health", (req, res) => {
     res.json({ status: "ok", timestamp: new Date().toISOString() });
   });
 
-  // 1. Teacher Secure Login Endpoint
   app.post("/api/teacher-auth", (req, res) => {
     try {
       const { email, password } = req.body;
       const expectedPassword = process.env.TEACHER_PASSWORD || process.env.TEACHER_ACCESS_KEY || "ASI@2025";
-
       if (!password || password.trim() !== expectedPassword.trim()) {
-        return res.status(401).json({
-          success: false,
-          error: "Galat password! (Invalid Teacher Access Key). Access denied."
-        });
+        return res.status(401).json({ success: false, error: "Galat password! (Invalid Teacher Access Key). Access denied." });
       }
-
       const facultyEmail = email?.trim() || "amerj.sir@asi-institute.edu";
       return res.json({
         success: true,
@@ -70,20 +61,16 @@ async function startServer() {
     }
   });
 
-  // 2. Scanned PDF Vision OCR Endpoint (Using Gemini Vision for Image-based PDFs)
   app.post("/api/extract-pdf-vision", async (req, res) => {
     try {
       const { images, apiKey } = req.body;
-
       if (!images || !Array.isArray(images) || images.length === 0) {
         return res.status(400).json({ error: "Scanned PDF page images required." });
       }
-
       const ai = getGeminiClient(apiKey);
       const visionPrompt = `You are an expert NEET/JEE paper extractor and OCR transcription specialist.
 Read all questions from the provided scanned exam paper images.
 Extract every MCQ question accurately with all 4 options, identify correct answer if indicated, and provide NCERT explanation in Hinglish.
-
 Return ONLY a valid JSON array matching this exact schema:
 [
   {
@@ -95,89 +82,57 @@ Return ONLY a valid JSON array matching this exact schema:
     "difficulty": "Medium"
   }
 ]
-
 Rules:
 - 'answer' must be integer index 0, 1, 2, or 3.
 - If options have (A), (B), (C), (D) or 1, 2, 3, 4, clean the option text.
 - Do NOT output markdown ticks, backticks, or preamble. Return pure JSON array.`;
-
       const imageParts = images.slice(0, 8).map((imgUrl: string) => {
         const matches = imgUrl.match(/^data:([^;]+);base64,(.+)$/);
         if (matches) {
-          return {
-            inlineData: {
-              mimeType: matches[1],
-              data: matches[2]
-            }
-          };
+          return { inlineData: { mimeType: matches[1], data: matches[2] } };
         }
-        return {
-          inlineData: {
-            mimeType: "image/jpeg",
-            data: imgUrl
-          }
-        };
+        return { inlineData: { mimeType: "image/jpeg", data: imgUrl } };
       });
-
       const response = await ai.models.generateContent({
         model: "gemini-2.5-flash",
-        contents: [
-          {
-            role: "user",
-            parts: [
-              { text: visionPrompt },
-              ...imageParts
-            ]
-          }
-        ],
-        config: {
-          responseMimeType: "application/json"
-        }
+        contents: [{ role: "user", parts: [{ text: visionPrompt }, ...imageParts] }],
+        config: { responseMimeType: "application/json" }
       });
-
       const responseText = response.text || "";
       const cleaned = responseText.replace(/```json|```/g, "").trim();
       const parsedArray = JSON.parse(cleaned);
-
       return res.json({ success: true, questions: parsedArray });
     } catch (err: any) {
       console.error("PDF Vision OCR error:", err);
-      return res.status(500).json({
-        error: err.message || "Failed to extract scanned PDF with Gemini Vision"
-      });
+      return res.status(500).json({ error: err.message || "Failed to extract scanned PDF with Gemini Vision" });
     }
   });
 
-  // 3. High Yield AI Generation Endpoint with Auto-Retry (2x) - YAHAN FIX LAGAYA HAI
   app.post("/api/generate-gemini-test", async (req, res) => {
     let { prompt, pdfText, apiKey, count } = req.body;
-
     if (!prompt && !pdfText) {
       return res.status(400).json({ error: "Prompt ya PDF text provide karein." });
     }
 
-    // ===== FIX: PDF TEXT KO CLEAN KARO AGAR ULTA HAI TO =====
+    // ===== FIX 2: YAHAN PDF TEXT KO CLEAN KAR RAHE HAI =====
     if (pdfText) {
-      pdfText = await cleanJumbledPdfText(pdfText);
+      pdfText = fixUltaPdfText(pdfText);
     }
 
     let ai: GoogleGenAI;
     try {
       ai = getGeminiClient(apiKey);
     } catch (keyErr: any) {
-      return res.status(401).json({
-        error: "API Key missing in Vercel Settings / Environment. Please configure GEMINI_API_KEY."
-      });
+      return res.status(401).json({ error: "API Key missing in Vercel Settings / Environment. Please configure GEMINI_API_KEY." });
     }
 
     const systemPrompt = `You are an expert NEET/JEE paper setter. Create high-yield, NCERT-based MCQs only. Return ONLY valid JSON array: [{question, options:[4], answer, explanation_hinglish, topic, difficulty}]`;
-
     const userMessage = `Create ${count || 15} high-yield MCQs for competitive exams (NEET / JEE / SSC).
-${pdfText ? `SOURCE PDF TEXT (extract strictly from this content, the text may be jumbled so reconstruct questions logically):\n${pdfText.slice(0, 30000)}` : `TOPIC / PROMPT:\n${prompt}`}
+${pdfText ? `SOURCE PDF TEXT (This text may be jumbled/ulti-sidhi extracted from PDF, you MUST reconstruct the questions logically and correctly):\n${pdfText.slice(0, 35000)}` : `TOPIC / PROMPT:\n${prompt}`}
 
 Ensure:
 1. Every item is an object with 'question', 'options' (array of exactly 4 strings), 'answer' (0-3 integer), 'explanation_hinglish' (detailed NCERT solution in Hinglish), 'topic', and 'difficulty' ('Easy' | 'Medium' | 'Hard').
-2. If source text is jumbled/ulti, use your intelligence to reconstruct proper question and options.
+2. If source text is jumbled, reconstruct it into proper readable questions.
 3. Return ONLY a valid JSON array without any markdown backticks.`;
 
     let lastError: any = null;
@@ -185,21 +140,12 @@ Ensure:
       try {
         const response = await ai.models.generateContent({
           model: "gemini-2.5-flash",
-          contents: [
-            {
-              role: "user",
-              parts: [{ text: `${systemPrompt}\n\n${userMessage}${attempt > 1 ? "\n\nIMPORTANT: Previous response had invalid JSON. Output strict, valid JSON array only!" : ""}` }]
-            }
-          ],
-          config: {
-            responseMimeType: "application/json"
-          }
+          contents: [{ role: "user", parts: [{ text: `${systemPrompt}\n\n${userMessage}${attempt > 1 ? "\n\nIMPORTANT: Previous response had invalid JSON. Output strict, valid JSON array only!" : ""}` }] }],
+          config: { responseMimeType: "application/json" }
         });
-
         const responseText = response.text || "";
         const cleaned = responseText.replace(/```json|```/g, "").trim();
         let parsed = JSON.parse(cleaned);
-
         let questionsArray = [];
         if (Array.isArray(parsed)) {
           questionsArray = parsed;
@@ -209,19 +155,15 @@ Ensure:
           const possibleArr = Object.values(parsed).find(v => Array.isArray(v));
           if (possibleArr) questionsArray = possibleArr as any[];
         }
-
         if (questionsArray.length > 0) {
           const formattedQuestions = questionsArray.map((q: any, idx: number) => ({
             id: idx + 1,
             question: q.question || q.q || `Question ${idx + 1}`,
-            options: Array.isArray(q.options) && q.options.length >= 2
-              ? q.options.slice(0, 4).map((opt: any) => String(opt).trim())
-              : ["Option A", "Option B", "Option C", "Option D"],
+            options: Array.isArray(q.options) && q.options.length >= 2 ? q.options.slice(0, 4).map((opt: any) => String(opt).trim()) : ["Option A", "Option B", "Option C", "Option D"],
             correctAnswer: typeof q.answer === "number" ? q.answer : (typeof q.ans === "number" ? q.ans : 0),
             explanation: q.explanation_hinglish || q.solution || q.explanation || "NCERT line-by-line concept.",
             chapter: q.topic || "Biology High Yield"
           }));
-
           const testObj = {
             title: (typeof parsed === "object" && !Array.isArray(parsed) && parsed.title) ? parsed.title : (prompt ? `High-Yield Mock: ${prompt.slice(0, 40)}` : "NEET High-Yield Biology Mock"),
             subject: (typeof parsed === "object" && !Array.isArray(parsed) && parsed.subject) ? parsed.subject : "Biology",
@@ -230,7 +172,6 @@ Ensure:
             difficulty: "Medium",
             questions: formattedQuestions
           };
-
           return res.json({ success: true, test: testObj, rawQuestions: formattedQuestions });
         }
       } catch (err: any) {
@@ -238,13 +179,9 @@ Ensure:
         console.warn(`Gemini generation attempt ${attempt} failed:`, err.message);
       }
     }
-
-    return res.status(500).json({
-      error: lastError?.message || "AI se valid JSON test generate nahi ho paya. Please try again."
-    });
+    return res.status(500).json({ error: lastError?.message || "AI se valid JSON test generate nahi ho paya. Please try again." });
   });
 
-  // 4. Teacher AI Tools API
   app.post("/api/ai/question-generator", async (req, res) => {
     try {
       const { topic, format, difficulty, count = 5, apiKey } = req.body;
@@ -254,7 +191,6 @@ Generate ${count} high-yield NEET Biology/Science MCQs based on:
 Topic/Content: "${topic || 'Cell Biology, Genetics, Human Physiology'}"
 Format: ${format || 'Single Choice MCQ (Standard NEET pattern)'}
 Difficulty Level: ${difficulty || 'NEET'}
-
 Return ONLY a valid JSON array:
 [
   {
@@ -287,11 +223,14 @@ Return ONLY a valid JSON array:
       const ai = getGeminiClient(apiKey);
       const prompt = `You are an expert NEET question quality improver.
 Improve the following question while STRICTLY preserving the core scientific concept and original correct answer key (Option index ${correctAnswer}):
-
 Question: "${question}"
 Options: ${JSON.stringify(options)}
 Correct Answer Index: ${correctAnswer}
-
+Your Task:
+1. Eliminate ambiguity and vague wording.
+2. Standardize distractors to true NEET difficulty with plausible scientific options.
+3. Ensure no grammatical or scientific inaccuracies.
+4. Provide a rich NCERT-grounded step-by-step Hinglish explanation.
 Return ONLY a valid JSON object:
 {
   "improvedQuestion": "Refined question text",
@@ -322,6 +261,11 @@ Return ONLY a valid JSON object:
       const prompt = `You are an NTA NEET Paper Quality Auditor.
 Audit these questions:
 ${JSON.stringify(questions)}
+Evaluate:
+1. Duplicate / repetitive concepts.
+2. Key accuracy & potential ambiguous options.
+3. Syllabus relevance & alignment with latest NEET pattern.
+4. Difficulty balance.
 Return ONLY valid JSON:
 {
   "qualityScore": 92,
@@ -395,14 +339,18 @@ Return ONLY valid JSON:
     "count": 35,
     "type": "Mandatory",
     "topics": [
-      { "chapter": "Cell Biology & Genetics", "questions": 12, "difficulty": "Medium" }
+      { "chapter": "Cell Biology & Genetics", "questions": 12, "difficulty": "Medium" },
+      { "chapter": "Human Physiology", "questions": 11, "difficulty": "Medium" },
+      { "chapter": "Plant Physiology & Ecology", "questions": 12, "difficulty": "Easy-Medium" }
     ]
   },
   "sectionB": {
     "count": 15,
     "type": "Attempt any 10",
     "topics": [
-      { "chapter": "Biotechnology & Applications", "questions": 5, "difficulty": "Hard" }
+      { "chapter": "Biotechnology & Applications", "questions": 5, "difficulty": "Hard" },
+      { "chapter": "Reproduction & Genetics Advanced", "questions": 5, "difficulty": "Hard" },
+      { "chapter": "Diversity in Living World", "questions": 5, "difficulty": "Medium" }
     ]
   },
   "cognitiveTaxonomy": {
@@ -435,14 +383,21 @@ Return ONLY valid JSON:
   } else {
     const distPath = path.join(process.cwd(), "dist");
     app.use(express.static(distPath));
-    app.get("*", (req, res) => {
+    app.get("*", (req, res, next) => {
+      if (req.path.startsWith("/api/")) return next();
       res.sendFile(path.join(distPath, "index.html"));
     });
   }
 
-  app.listen(PORT, "0.0.0.0", () => {
-    console.log(`Server running on port ${PORT}`);
-  });
+  // ===== FIX 3: VERCEL KE LIYE YE IMPORTANT HAI =====
+  if (!process.env.VERCEL) {
+    app.listen(PORT, "0.0.0.0", () => {
+      console.log(`Server running on port ${PORT}`);
+    });
+  }
+
+  return app;
 }
 
-startServer();
+const appPromise = startServer();
+export default appPromise;
