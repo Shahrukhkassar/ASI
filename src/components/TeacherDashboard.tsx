@@ -19,11 +19,14 @@ import {
   Eye,
   AlertCircle,
   FileUp,
-  Upload
+  Upload,
+  BrainCircuit,
+  Braces
 } from 'lucide-react';
 import { UserProfile, TestItem, TestCategory, Difficulty } from '../types';
 import { CustomTestBuilder } from './CustomTestBuilder';
 import { GeminiCustomTestBox } from './GeminiCustomTestBox';
+import { TeacherAiTools } from './TeacherAiTools';
 
 interface TeacherDashboardProps {
   user: UserProfile;
@@ -59,12 +62,15 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
   });
 
   const [isBuildingCustomTest, setIsBuildingCustomTest] = useState(false);
+  const [customBuilderTab, setCustomBuilderTab] = useState<'editor' | 'json' | 'gemini' | 'extractor'>('editor');
   const [editingTest, setEditingTest] = useState<TestItem | null>(null);
   const [successNotice, setSuccessNotice] = useState<string | null>(null);
   const [geminiModalOpen, setGeminiModalOpen] = useState(false);
+  const [facultyActiveView, setFacultyActiveView] = useState<'tests' | 'ai_tools'>('tests');
 
-  const handleOpenCustomBuilder = (testToEdit: TestItem | null = null) => {
+  const handleOpenCustomBuilder = (testToEdit: TestItem | null = null, tab: 'editor' | 'json' | 'gemini' | 'extractor' = 'editor') => {
     setEditingTest(testToEdit);
+    setCustomBuilderTab(tab);
     setIsBuildingCustomTest(true);
   };
 
@@ -115,6 +121,7 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
     return (
       <CustomTestBuilder
         existingTest={editingTest}
+        initialTab={customBuilderTab}
         onBack={() => {
           setIsBuildingCustomTest(false);
           setEditingTest(null);
@@ -235,12 +242,16 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
 
             <div className="flex flex-wrap items-center gap-3">
               <button
-                id="teacher-gemini-test-hero-btn"
-                onClick={() => setGeminiModalOpen(true)}
-                className="px-5 py-3 bg-white text-slate-900 hover:bg-slate-100 font-bold text-sm rounded-xl shadow-lg flex items-center justify-center gap-2 cursor-pointer transition-all active:scale-98 shrink-0 border border-slate-200"
+                id="teacher-toggle-ai-tools-btn"
+                onClick={() => setFacultyActiveView(facultyActiveView === 'ai_tools' ? 'tests' : 'ai_tools')}
+                className={`px-5 py-3 font-bold text-sm rounded-xl shadow-lg flex items-center justify-center gap-2 cursor-pointer transition-all active:scale-98 shrink-0 ${
+                  facultyActiveView === 'ai_tools'
+                    ? 'bg-amber-400 text-slate-950 ring-2 ring-amber-300'
+                    : 'bg-white text-slate-900 hover:bg-slate-100'
+                }`}
               >
-                <Sparkles className="w-4 h-4 text-violet-600" />
-                <span>🤖 Gemini AI Test Creator</span>
+                <BrainCircuit className="w-4 h-4 text-violet-700" />
+                <span>{facultyActiveView === 'ai_tools' ? '📋 Back to Test Library' : '🤖 Open AI Tools Studio'}</span>
               </button>
 
               <button
@@ -253,8 +264,17 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
               </button>
 
               <button
+                id="teacher-json-import-hero-btn"
+                onClick={() => handleOpenCustomBuilder(null, 'json')}
+                className="px-4 py-3 bg-violet-700/80 hover:bg-violet-700 text-white font-bold text-sm rounded-xl border border-violet-500/50 shadow-md flex items-center justify-center gap-2 cursor-pointer transition-all shrink-0"
+              >
+                <Braces className="w-4 h-4 text-violet-200" />
+                <span>Import JSON (File / Text)</span>
+              </button>
+
+              <button
                 id="teacher-pdf-extract-hero-btn"
-                onClick={() => handleOpenCustomBuilder(null)}
+                onClick={() => handleOpenCustomBuilder(null, 'extractor')}
                 className="px-4 py-3 bg-violet-700/70 hover:bg-violet-700 text-white font-bold text-sm rounded-xl border border-violet-500/50 shadow-md flex items-center justify-center gap-2 cursor-pointer transition-all shrink-0"
               >
                 <FileUp className="w-4 h-4 text-violet-200" />
@@ -284,106 +304,142 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
           </div>
         </section>
 
-        {/* 2. Manage Tests Section */}
-        <section className="space-y-4">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-            <div>
-              <h2 className="text-xl sm:text-2xl font-extrabold text-slate-900 flex items-center gap-2">
-                <Layers className="w-5 h-5 text-violet-600" />
-                <span>Test Management &amp; Mock Library ({createdTests.length})</span>
-              </h2>
-              <p className="text-xs sm:text-sm text-slate-500">
-                Active tests available for students to attempt in the portal.
-              </p>
+        {/* View Switcher Tabs */}
+        <div className="flex items-center gap-2 bg-slate-200/80 p-1.5 rounded-2xl w-fit">
+          <button
+            onClick={() => setFacultyActiveView('tests')}
+            className={`px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-2 cursor-pointer ${
+              facultyActiveView === 'tests'
+                ? 'bg-white text-violet-900 shadow-xs'
+                : 'text-slate-600 hover:text-slate-900'
+            }`}
+          >
+            <Layers className="w-4 h-4 text-violet-600" />
+            <span>Test Management &amp; Mock Library ({createdTests.length})</span>
+          </button>
+
+          <button
+            id="tab-btn-ai-tools"
+            onClick={() => setFacultyActiveView('ai_tools')}
+            className={`px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-2 cursor-pointer ${
+              facultyActiveView === 'ai_tools'
+                ? 'bg-violet-700 text-white shadow-xs'
+                : 'text-slate-600 hover:text-slate-900'
+            }`}
+          >
+            <BrainCircuit className="w-4 h-4 text-amber-300" />
+            <span>🤖 AI Question &amp; Paper Setter Studio</span>
+          </button>
+        </div>
+
+        {/* Dynamic View: AI Tools Studio vs Tests Management */}
+        {facultyActiveView === 'ai_tools' ? (
+          <TeacherAiTools
+            onPublishTest={handleTestPublished}
+            existingTests={createdTests}
+          />
+        ) : (
+          /* 2. Manage Tests Section */
+          <section className="space-y-4">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+              <div>
+                <h2 className="text-xl sm:text-2xl font-extrabold text-slate-900 flex items-center gap-2">
+                  <Layers className="w-5 h-5 text-violet-600" />
+                  <span>Test Management &amp; Mock Library ({createdTests.length})</span>
+                </h2>
+                <p className="text-xs sm:text-sm text-slate-500">
+                  Active tests available for students to attempt in the portal.
+                </p>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => handleOpenCustomBuilder(null)}
+                  className="px-4 py-2 bg-violet-600 hover:bg-violet-700 text-white font-bold text-xs rounded-xl shadow-xs flex items-center gap-1.5 self-start cursor-pointer transition-colors"
+                >
+                  <Plus className="w-4 h-4" />
+                  <span>Custom Test Builder</span>
+                </button>
+              </div>
             </div>
 
-            <div className="flex items-center gap-2">
-              <button
-                onClick={() => handleOpenCustomBuilder(null)}
-                className="px-4 py-2 bg-violet-600 hover:bg-violet-700 text-white font-bold text-xs rounded-xl shadow-xs flex items-center gap-1.5 self-start cursor-pointer transition-colors"
-              >
-                <Plus className="w-4 h-4" />
-                <span>Custom Test Builder</span>
-              </button>
-            </div>
-          </div>
-
-          {/* Test Table List */}
-          <div className="bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden">
-            <div className="overflow-x-auto">
-              <table className="w-full text-left text-xs sm:text-sm">
-                <thead className="bg-slate-50 border-b border-slate-200 text-slate-600 font-bold text-xs uppercase tracking-wider">
-                  <tr>
-                    <th className="px-6 py-4">Test Title &amp; Category</th>
-                    <th className="px-6 py-4">Questions / Duration</th>
-                    <th className="px-6 py-4">Difficulty</th>
-                    <th className="px-6 py-4">Attempts</th>
-                    <th className="px-6 py-4 text-right">Actions</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100 font-medium text-slate-700">
-                  {createdTests.map((test) => (
-                    <tr key={test.id} className="hover:bg-slate-50/80 transition-colors">
-                      <td className="px-6 py-4">
-                        <div className="font-bold text-slate-900 flex items-center gap-2">
-                          <span>{test.title}</span>
-                          {test.isNew && (
-                            <span className="px-2 py-0.5 rounded-full text-[10px] font-extrabold bg-emerald-100 text-emerald-800">
-                              NEW
-                            </span>
-                          )}
-                        </div>
-                        <div className="text-xs text-violet-700 font-semibold">{test.category}</div>
-                      </td>
-                      <td className="px-6 py-4">
-                        <span className="font-bold text-slate-900">{test.totalQuestions || test.questions.length} Qs</span> • {test.durationMinutes} mins ({test.totalMarks} marks)
-                      </td>
-                      <td className="px-6 py-4">
-                        <span className={`px-2.5 py-1 rounded-full text-[11px] font-bold ${
-                          test.difficulty === 'Easy'
-                            ? 'bg-emerald-100 text-emerald-800'
-                            : test.difficulty === 'Medium'
-                            ? 'bg-amber-100 text-amber-800'
-                            : 'bg-rose-100 text-rose-800'
-                        }`}>
-                          {test.difficulty}
-                        </span>
-                      </td>
-                      <td className="px-6 py-4">
-                        <span className="font-bold text-slate-900">{test.attemptsCount.toLocaleString()}</span> attempts
-                      </td>
-                      <td className="px-6 py-4 text-right">
-                        <div className="flex items-center justify-end gap-1.5">
-                          <button
-                            onClick={() => handleOpenCustomBuilder(test)}
-                            className="p-2 text-slate-600 hover:text-violet-700 hover:bg-violet-50 rounded-lg transition-colors cursor-pointer"
-                            title="Edit Questions in Custom Test Builder"
-                          >
-                            <Edit3 className="w-4 h-4" />
-                          </button>
-                          <button
-                            onClick={() => onPreviewTest(test)}
-                            className="p-2 text-violet-600 hover:bg-violet-50 rounded-lg transition-colors cursor-pointer"
-                            title="Preview Test Simulator"
-                          >
-                            <Eye className="w-4 h-4" />
-                          </button>
-                          <button
-                            onClick={() => handleDeleteTest(test.id, test.title)}
-                            className="p-2 text-rose-500 hover:text-rose-700 hover:bg-rose-50 rounded-lg transition-colors cursor-pointer"
-                            title="Delete Test"
-                          >
-                            <Trash2 className="w-4 h-4" />
-                          </button>
-                        </div>
-                      </td>
+            {/* Test Table List */}
+            <div className="bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden">
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-xs sm:text-sm">
+                  <thead className="bg-slate-50 border-b border-slate-200 text-slate-600 font-bold text-xs uppercase tracking-wider">
+                    <tr>
+                      <th className="px-6 py-4">Test Title &amp; Category</th>
+                      <th className="px-6 py-4">Questions / Duration</th>
+                      <th className="px-6 py-4">Difficulty</th>
+                      <th className="px-6 py-4">Attempts</th>
+                      <th className="px-6 py-4 text-right">Actions</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100 font-medium text-slate-700">
+                    {createdTests.map((test) => (
+                      <tr key={test.id} className="hover:bg-slate-50/80 transition-colors">
+                        <td className="px-6 py-4">
+                          <div className="font-bold text-slate-900 flex items-center gap-2">
+                            <span>{test.title}</span>
+                            {test.isNew && (
+                              <span className="px-2 py-0.5 rounded-full text-[10px] font-extrabold bg-emerald-100 text-emerald-800">
+                                NEW
+                              </span>
+                            )}
+                          </div>
+                          <div className="text-xs text-violet-700 font-semibold">{test.category}</div>
+                        </td>
+                        <td className="px-6 py-4">
+                          <span className="font-bold text-slate-900">{test.totalQuestions || test.questions.length} Qs</span> • {test.durationMinutes} mins ({test.totalMarks} marks)
+                        </td>
+                        <td className="px-6 py-4">
+                          <span className={`px-2.5 py-1 rounded-full text-[11px] font-bold ${
+                            test.difficulty === 'Easy'
+                              ? 'bg-emerald-100 text-emerald-800'
+                              : test.difficulty === 'Medium'
+                              ? 'bg-amber-100 text-amber-800'
+                              : 'bg-rose-100 text-rose-800'
+                          }`}>
+                            {test.difficulty}
+                          </span>
+                        </td>
+                        <td className="px-6 py-4">
+                          <span className="font-bold text-slate-900">{test.attemptsCount.toLocaleString()}</span> attempts
+                        </td>
+                        <td className="px-6 py-4 text-right">
+                          <div className="flex items-center justify-end gap-1.5">
+                            <button
+                              onClick={() => handleOpenCustomBuilder(test)}
+                              className="p-2 text-slate-600 hover:text-violet-700 hover:bg-violet-50 rounded-lg transition-colors cursor-pointer"
+                              title="Edit Questions in Custom Test Builder"
+                            >
+                              <Edit3 className="w-4 h-4" />
+                            </button>
+                            <button
+                              onClick={() => onPreviewTest(test)}
+                              className="p-2 text-violet-600 hover:bg-violet-50 rounded-lg transition-colors cursor-pointer"
+                              title="Preview Test Simulator"
+                            >
+                              <Eye className="w-4 h-4" />
+                            </button>
+                            <button
+                              onClick={() => handleDeleteTest(test.id, test.title)}
+                              className="p-2 text-rose-500 hover:text-rose-700 hover:bg-rose-50 rounded-lg transition-colors cursor-pointer"
+                              title="Delete Test"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
             </div>
-          </div>
-        </section>
+          </section>
+        )}
 
       </main>
 

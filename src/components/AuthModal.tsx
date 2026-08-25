@@ -65,27 +65,6 @@ export const AuthModal: React.FC<AuthModalProps> = ({
     onClose();
   };
 
-  const handleQuickDemo = (demoRole: UserRole) => {
-    if (demoRole === 'student') {
-      onLoginSuccess({
-        name: 'Priya Sharma',
-        email: 'priya.sharma@neetprep.in',
-        role: 'student',
-        targetExam: 'NEET 2026',
-        isLoggedIn: true
-      });
-    } else {
-      onLoginSuccess({
-        name: 'Amerj Sir',
-        email: 'amerj.sir@asi-institute.edu',
-        role: 'teacher',
-        department: 'Head of NEET Biology',
-        isLoggedIn: true
-      });
-    }
-    onClose();
-  };
-
   return (
     <div className="fixed inset-0 z-50 overflow-y-auto bg-slate-950/60 backdrop-blur-xs flex items-center justify-center p-4">
       <div className="bg-white w-full max-w-md rounded-3xl shadow-2xl border border-slate-200 overflow-hidden animate-in fade-in zoom-in-95 my-8">
@@ -296,26 +275,14 @@ export const AuthModal: React.FC<AuthModalProps> = ({
             <span>{mode === 'login' ? 'Login with Google' : 'Sign Up with Google'}</span>
           </button>
 
-          {/* Quick Demo Logins Helper */}
-          <div className="pt-3 border-t border-slate-100 grid grid-cols-2 gap-2">
-            <button
-              type="button"
-              id="demo-student-login-btn"
-              onClick={() => handleQuickDemo('student')}
-              className="py-2 bg-violet-50 hover:bg-violet-100 text-violet-800 font-bold text-[11px] rounded-xl border border-violet-200 flex items-center justify-center gap-1 transition-colors cursor-pointer"
+          <div className="pt-2 text-center">
+            <a
+              href="#/teacher-login"
+              onClick={onClose}
+              className="text-xs text-violet-700 hover:text-violet-900 font-semibold hover:underline"
             >
-              <Sparkles className="w-3 h-3 text-violet-600" />
-              <span>Demo Student</span>
-            </button>
-            <button
-              type="button"
-              id="demo-teacher-login-btn"
-              onClick={() => handleQuickDemo('teacher')}
-              className="py-2 bg-indigo-50 hover:bg-indigo-100 text-indigo-800 font-bold text-[11px] rounded-xl border border-indigo-200 flex items-center justify-center gap-1 transition-colors cursor-pointer"
-            >
-              <Sparkles className="w-3 h-3 text-indigo-600" />
-              <span>Demo Teacher</span>
-            </button>
+              Faculty / Teacher? Access Dedicated Teacher Login →
+            </a>
           </div>
 
         </form>

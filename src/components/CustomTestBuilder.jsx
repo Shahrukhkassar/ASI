@@ -24,12 +24,16 @@ import {
   Database,
   RefreshCw,
   HelpCircle,
-  Bot
+  Bot,
+  FileCode,
+  Download,
+  Braces
 } from 'lucide-react';
 import * as pdfjsLib from 'pdfjs-dist';
 import { GeminiCustomTestBox } from './GeminiCustomTestBox';
 import { db } from '../firebase';
 import { doc, setDoc } from 'firebase/firestore';
+import { extractFromPdfFile } from '../utils/pdfExtractor';
 
 // Set up pdf.js worker fallback for browser environment
 if (typeof window !== 'undefined' && pdfjsLib && pdfjsLib.GlobalWorkerOptions) {
@@ -69,7 +73,97 @@ Q4. Which hormone is directly responsible for the 'fight or flight' response in 
 Answer: (B)
 Explanation: Epinephrine is secreted by the adrenal medulla during acute stress.`;
 
-export const CustomTestBuilder = ({ onBack, onTestCreated, existingTest = null }) => {
+// Sample JSON Test format (Full Test with Metadata)
+const SAMPLE_JSON_FULL_TEST = `{
+  "title": "NEET 2026 High-Yield Genetics & Cell Biology Mock",
+  "subject": "Biology",
+  "category": "NEET Full Syllabus",
+  "difficulty": "Medium",
+  "durationMinutes": 45,
+  "hasNegativeMarking": true,
+  "syllabus": ["Genetics", "Cell: The Unit of Life", "Molecular Biology"],
+  "description": "NCERT-aligned high-yield test imported via JSON format.",
+  "questions": [
+    {
+      "question": "Which of the following organelles is known as the powerhouse of the cell?",
+      "options": [
+        "Golgi apparatus",
+        "Mitochondria",
+        "Ribosome",
+        "Lysosome"
+      ],
+      "correctAnswer": 1,
+      "explanation": "Mitochondria generate most of the cell's ATP through aerobic cellular respiration.",
+      "chapter": "Cell: The Unit of Life"
+    },
+    {
+      "question": "During DNA replication, which enzyme is primarily responsible for unzipping the double helix?",
+      "options": [
+        "DNA Polymerase",
+        "RNA Primase",
+        "DNA Helicase",
+        "DNA Ligase"
+      ],
+      "correctAnswer": 2,
+      "explanation": "DNA Helicase unwinds the double helix at the replication fork by breaking hydrogen bonds.",
+      "chapter": "Molecular Basis of Inheritance"
+    },
+    {
+      "question": "In Mendelian genetics, what is the phenotypic ratio of a standard monohybrid cross in the F2 generation?",
+      "options": [
+        "9:3:3:1",
+        "1:2:1",
+        "3:1",
+        "1:1"
+      ],
+      "correctAnswer": 2,
+      "explanation": "The F2 generation of a monohybrid cross gives 3 dominant to 1 recessive phenotype.",
+      "chapter": "Principles of Inheritance"
+    },
+    {
+      "question": "Which hormone is directly responsible for the 'fight or flight' response in humans?",
+      "options": [
+        "Insulin",
+        "Epinephrine (Adrenaline)",
+        "Thyroxine",
+        "Estrogen"
+      ],
+      "correctAnswer": 1,
+      "explanation": "Epinephrine is secreted by the adrenal medulla during acute stress.",
+      "chapter": "Chemical Coordination and Integration"
+    }
+  ]
+}`;
+
+// Sample JSON array of questions only
+const SAMPLE_JSON_QUESTIONS_ARRAY = `[
+  {
+    "question": "What is the primary function of stomata in plant leaves?",
+    "options": [
+      "Water absorption from soil",
+      "Gas exchange and transpiration",
+      "Photosynthesis in guard cells exclusively",
+      "Mineral transport to roots"
+    ],
+    "correctAnswer": 1,
+    "explanation": "Stomata facilitate exchange of gases (CO2 & O2) and regulate transpiration.",
+    "chapter": "Plant Physiology"
+  },
+  {
+    "question": "Which phase of mitosis is characterized by chromosomes aligning at the equatorial plate?",
+    "options": [
+      "Prophase",
+      "Metaphase",
+      "Anaphase",
+      "Telophase"
+    ],
+    "correctAnswer": 1,
+    "explanation": "During metaphase, chromosomes align along the spindle equator (metaphase plate).",
+    "chapter": "Cell Cycle and Cell Division"
+  }
+]`;
+
+export const CustomTestBuilder = ({ onBack, onTestCreated, existingTest = null, initialTab = 'editor' }) => {
   // Test Metadata
   const [testTitle, setTestTitle] = useState(existingTest ? existingTest.title : '');
   const [subject, setSubject] = useState(existingTest ? existingTest.subject : 'Biology');
@@ -82,7 +176,7 @@ export const CustomTestBuilder = ({ onBack, onTestCreated, existingTest = null }
 
   // Questions State
   const [questions, setQuestions] = useState(existingTest ? existingTest.questions : []);
-  const [activeTab, setActiveTab] = useState('editor'); // 'editor' | 'extractor' | 'preview'
+  const [activeTab, setActiveTab] = useState(initialTab); // 'gemini' | 'editor' | 'json' | 'extractor' | 'preview'
   
   // Extraction state
   const [rawText, setRawText] = useState('');
@@ -90,6 +184,15 @@ export const CustomTestBuilder = ({ onBack, onTestCreated, existingTest = null }
   const [extractionLog, setExtractionLog] = useState(null);
   const [uploadedFileName, setUploadedFileName] = useState('');
   const fileInputRef = useRef(null);
+
+  // JSON Import & Export State
+  const [jsonText, setJsonText] = useState('');
+  const [jsonFileName, setJsonFileName] = useState('');
+  const [jsonValidationLog, setJsonValidationLog] = useState(null);
+  const [jsonImportMode, setJsonImportMode] = useState('replace'); // 'replace' | 'append'
+  const [jsonApplyMetadata, setJsonApplyMetadata] = useState(true);
+  const [isProcessingJson, setIsProcessingJson] = useState(false);
+  const jsonFileInputRef = useRef(null);
 
   // Manual Question Edit Modal / Inline State
   const [editingQuestionIndex, setEditingQuestionIndex] = useState(null);
@@ -109,6 +212,307 @@ export const CustomTestBuilder = ({ onBack, onTestCreated, existingTest = null }
   // Marks calculation (+4 for correct, -1 for negative or 0)
   const marksPerQuestion = 4;
   const totalCalculatedMarks = questions.length * marksPerQuestion;
+
+  // Comprehensive JSON Test Parser Function
+  const parseJsonTestData = (rawInput) => {
+    if (!rawInput || !rawInput.trim()) {
+      throw new Error("JSON data is empty. Please enter or paste valid JSON text.");
+    }
+
+    let parsed;
+    try {
+      parsed = typeof rawInput === 'object' ? rawInput : JSON.parse(rawInput);
+    } catch (err) {
+      throw new Error(`JSON Syntax Error: ${err.message}. Please verify brackets, quotes, and commas.`);
+    }
+
+    let metadata = {};
+    let rawQuestionsList = [];
+
+    if (Array.isArray(parsed)) {
+      rawQuestionsList = parsed;
+    } else if (typeof parsed === 'object' && parsed !== null) {
+      // Extract optional test-level metadata
+      if (parsed.title || parsed.testTitle || parsed.name) {
+        metadata.title = String(parsed.title || parsed.testTitle || parsed.name).trim();
+      }
+      if (parsed.subject) metadata.subject = String(parsed.subject).trim();
+      if (parsed.durationMinutes || parsed.duration || parsed.timeMinutes) {
+        metadata.durationMinutes = Number(parsed.durationMinutes || parsed.duration || parsed.timeMinutes);
+      }
+      if (parsed.category) metadata.category = String(parsed.category).trim();
+      if (parsed.difficulty) metadata.difficulty = String(parsed.difficulty).trim();
+      if (parsed.hasNegativeMarking !== undefined) metadata.hasNegativeMarking = Boolean(parsed.hasNegativeMarking);
+      if (parsed.syllabus) {
+        metadata.syllabus = Array.isArray(parsed.syllabus) ? parsed.syllabus.join(', ') : String(parsed.syllabus);
+      }
+      if (parsed.description) metadata.description = String(parsed.description).trim();
+
+      // Extract array of questions
+      if (Array.isArray(parsed.questions)) {
+        rawQuestionsList = parsed.questions;
+      } else if (Array.isArray(parsed.rawQuestions)) {
+        rawQuestionsList = parsed.rawQuestions;
+      } else if (Array.isArray(parsed.items)) {
+        rawQuestionsList = parsed.items;
+      } else if (Array.isArray(parsed.mcqs)) {
+        rawQuestionsList = parsed.mcqs;
+      } else {
+        throw new Error("Could not find a 'questions' array in the JSON object. Please provide an array of questions or an object with a 'questions' field.");
+      }
+    } else {
+      throw new Error("JSON must be either an array of questions or an object containing a 'questions' property.");
+    }
+
+    if (rawQuestionsList.length === 0) {
+      throw new Error("The 'questions' array in the JSON file is empty.");
+    }
+
+    // Format and sanitize each question item
+    const formattedQuestions = rawQuestionsList.map((item, idx) => {
+      if (!item || typeof item !== 'object') {
+        throw new Error(`Item at index ${idx} is not a valid question object.`);
+      }
+
+      const questionPrompt = item.question || item.questionText || item.prompt || item.text || `Question ${idx + 1}`;
+      
+      // Normalize options
+      let optionsList = [];
+      if (Array.isArray(item.options)) {
+        optionsList = item.options.map(opt => String(opt || '').trim());
+      } else if (typeof item.options === 'object' && item.options !== null) {
+        const standardKeys = ['A', 'B', 'C', 'D'];
+        const found = [];
+        standardKeys.forEach(k => {
+          if (item.options[k] !== undefined) found.push(String(item.options[k]).trim());
+          else if (item.options[k.toLowerCase()] !== undefined) found.push(String(item.options[k.toLowerCase()]).trim());
+        });
+        optionsList = found.length >= 2 ? found : Object.values(item.options).map(v => String(v).trim());
+      }
+
+      while (optionsList.length < 4) {
+        optionsList.push(`Option ${String.fromCharCode(65 + optionsList.length)}`);
+      }
+      optionsList = optionsList.slice(0, 4);
+
+      // Normalize correctAnswer (0, 1, 2, 3)
+      let correctIdx = 0;
+      const ansKey = item.correctAnswer !== undefined 
+        ? item.correctAnswer 
+        : (item.answer !== undefined 
+            ? item.answer 
+            : (item.correctOption !== undefined 
+                ? item.correctOption 
+                : (item.correctIndex !== undefined 
+                    ? item.correctIndex 
+                    : item.key)));
+
+      if (typeof ansKey === 'number') {
+        if (ansKey >= 0 && ansKey < 4) {
+          correctIdx = ansKey;
+        } else if (ansKey >= 1 && ansKey <= 4) {
+          // 1-based index support
+          correctIdx = ansKey - 1;
+        }
+      } else if (typeof ansKey === 'string') {
+        const cleaned = ansKey.trim().toUpperCase().replace(/[\(\)\[\]\.]/g, '');
+        if (cleaned === 'A' || cleaned === '1') correctIdx = 0;
+        else if (cleaned === 'B' || cleaned === '2') correctIdx = 1;
+        else if (cleaned === 'C' || cleaned === '3') correctIdx = 2;
+        else if (cleaned === 'D' || cleaned === '4') correctIdx = 3;
+      }
+
+      const explanation = item.explanation || item.explanation_hinglish || item.ncertReference || item.solution || item.reason || 'Refer to NCERT textbook concepts.';
+      const chapter = item.chapter || item.topic || item.subject || metadata.subject || subject;
+
+      return {
+        id: idx + 1,
+        question: questionPrompt,
+        options: optionsList,
+        correctAnswer: correctIdx,
+        explanation,
+        chapter
+      };
+    });
+
+    return {
+      metadata,
+      questions: formattedQuestions
+    };
+  };
+
+  // JSON File Upload Handler
+  const handleJsonFileUpload = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setJsonFileName(file.name);
+    setIsProcessingJson(true);
+    setJsonValidationLog({ status: 'info', message: `Reading JSON file "${file.name}"...` });
+
+    try {
+      const text = await file.text();
+      setJsonText(text);
+
+      const parsedData = parseJsonTestData(text);
+      setJsonValidationLog({
+        status: 'success',
+        message: `Valid JSON! Found ${parsedData.questions.length} questions${parsedData.metadata.title ? ` and metadata for "${parsedData.metadata.title}"` : ''}. Click "Apply JSON Import" to load into test.`,
+        previewCount: parsedData.questions.length,
+        metadata: parsedData.metadata
+      });
+    } catch (err) {
+      console.error('JSON parse error:', err);
+      setJsonValidationLog({
+        status: 'error',
+        message: err.message
+      });
+    } finally {
+      setIsProcessingJson(false);
+    }
+  };
+
+  // Run JSON Parser and Apply to Test
+  const handleApplyJsonImport = () => {
+    if (!jsonText.trim()) {
+      setJsonValidationLog({ status: 'error', message: 'Please paste JSON text or select a .json file.' });
+      return;
+    }
+
+    setIsProcessingJson(true);
+    try {
+      const parsedData = parseJsonTestData(jsonText);
+      const incomingQuestions = parsedData.questions;
+
+      // Apply metadata if enabled and present
+      if (jsonApplyMetadata && parsedData.metadata) {
+        const m = parsedData.metadata;
+        if (m.title) setTestTitle(m.title);
+        if (m.subject) setSubject(m.subject);
+        if (m.durationMinutes) setDurationMinutes(m.durationMinutes);
+        if (m.category) setCategory(m.category);
+        if (m.difficulty) setDifficulty(m.difficulty);
+        if (m.hasNegativeMarking !== undefined) setHasNegativeMarking(m.hasNegativeMarking);
+        if (m.syllabus) setSyllabusInput(m.syllabus);
+        if (m.description) setDescription(m.description);
+      }
+
+      if (jsonImportMode === 'replace') {
+        const indexedQuestions = incomingQuestions.map((q, idx) => ({ ...q, id: idx + 1 }));
+        setQuestions(indexedQuestions);
+      } else {
+        // Append mode
+        const existingCount = questions.length;
+        const appended = incomingQuestions.map((q, idx) => ({ ...q, id: existingCount + idx + 1 }));
+        setQuestions([...questions, ...appended]);
+      }
+
+      setPublishStatus({
+        type: 'success',
+        message: `JSON imported successfully! ${incomingQuestions.length} MCQs loaded in ${jsonImportMode === 'replace' ? 'Replacement' : 'Append'} mode.`
+      });
+
+      setActiveTab('editor');
+    } catch (err) {
+      setJsonValidationLog({
+        status: 'error',
+        message: err.message
+      });
+    } finally {
+      setIsProcessingJson(false);
+    }
+  };
+
+  // Load Sample JSON Templates
+  const handleLoadSampleJson = (type = 'full') => {
+    const template = type === 'full' ? SAMPLE_JSON_FULL_TEST : SAMPLE_JSON_QUESTIONS_ARRAY;
+    setJsonText(template);
+    setJsonFileName(type === 'full' ? 'sample_full_test.json' : 'sample_questions_array.json');
+    try {
+      const parsed = parseJsonTestData(template);
+      setJsonValidationLog({
+        status: 'success',
+        message: `Loaded ${type === 'full' ? 'Full Test Template' : 'Questions Array Template'} with ${parsed.questions.length} MCQs. Ready to import or customize!`,
+        previewCount: parsed.questions.length,
+        metadata: parsed.metadata
+      });
+    } catch (e) {
+      console.warn(e);
+    }
+  };
+
+  // Download Sample JSON file template
+  const handleDownloadSampleJson = () => {
+    const blob = new Blob([SAMPLE_JSON_FULL_TEST], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'asi_sample_neet_test.json';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
+
+  // Export Current Test to JSON file
+  const handleExportCurrentTestJson = () => {
+    const syllabusArray = syllabusInput.split(',').map((s) => s.trim()).filter(Boolean);
+    const currentTestObj = {
+      title: testTitle || 'Untitled NEET Mock Test',
+      subject: subject || 'Biology',
+      category: category || 'NEET Full Syllabus',
+      difficulty: difficulty || 'Medium',
+      durationMinutes: Number(durationMinutes) || 45,
+      hasNegativeMarking: Boolean(hasNegativeMarking),
+      syllabus: syllabusArray.length > 0 ? syllabusArray : ['NEET Biology Syllabus'],
+      description: description || 'Custom test authored via ASI Faculty Portal.',
+      questions: questions.map((q, idx) => ({
+        id: idx + 1,
+        question: q.question,
+        options: q.options,
+        correctAnswer: q.correctAnswer,
+        explanation: q.explanation || '',
+        chapter: q.chapter || subject
+      }))
+    };
+
+    const jsonString = JSON.stringify(currentTestObj, null, 2);
+    const blob = new Blob([jsonString], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    const safeTitle = (testTitle || 'test').replace(/[^a-zA-Z0-9_-]/g, '_').toLowerCase();
+    a.download = `${safeTitle}_export.json`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
+
+  // Copy JSON to Clipboard
+  const handleCopyJsonToClipboard = () => {
+    const syllabusArray = syllabusInput.split(',').map((s) => s.trim()).filter(Boolean);
+    const currentTestObj = {
+      title: testTitle || 'Untitled NEET Mock Test',
+      subject: subject || 'Biology',
+      category: category || 'NEET Full Syllabus',
+      difficulty: difficulty || 'Medium',
+      durationMinutes: Number(durationMinutes) || 45,
+      hasNegativeMarking: Boolean(hasNegativeMarking),
+      syllabus: syllabusArray.length > 0 ? syllabusArray : ['NEET Biology Syllabus'],
+      description: description || 'Custom test authored via ASI Faculty Portal.',
+      questions: questions.map((q, idx) => ({
+        id: idx + 1,
+        question: q.question,
+        options: q.options,
+        correctAnswer: q.correctAnswer,
+        explanation: q.explanation || '',
+        chapter: q.chapter || subject
+      }))
+    };
+    navigator.clipboard.writeText(JSON.stringify(currentTestObj, null, 2));
+    alert('Current test JSON copied to clipboard!');
+  };
 
   // Regex MCQ Parser Function
   const parseMCQText = (text) => {
@@ -212,7 +616,7 @@ export const CustomTestBuilder = ({ onBack, onTestCreated, existingTest = null }
     return extracted;
   };
 
-  // PDF Text Extraction Handler
+  // PDF Text Extraction Handler with Progress & Scanned PDF Vision Fallback
   const handlePdfUpload = async (e) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -222,32 +626,62 @@ export const CustomTestBuilder = ({ onBack, onTestCreated, existingTest = null }
     setExtractionLog({ status: 'info', message: `Reading "${file.name}"...` });
 
     try {
-      if (file.type === 'application/pdf' || file.name.endsWith('.pdf')) {
-        const arrayBuffer = await file.arrayBuffer();
-        const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
-        let fullExtractedText = '';
+      if (file.name.endsWith('.json') || file.type === 'application/json') {
+        const text = await file.text();
+        setJsonText(text);
+        setJsonFileName(file.name);
+        const parsedJson = parseJsonTestData(text);
+        if (parsedJson.questions.length > 0) {
+          if (parsedJson.metadata.title) setTestTitle(parsedJson.metadata.title);
+          if (parsedJson.metadata.subject) setSubject(parsedJson.metadata.subject);
+          setQuestions((prev) => [...prev, ...parsedJson.questions]);
+          setExtractionLog({
+            status: 'success',
+            message: `JSON format detected! Successfully loaded ${parsedJson.questions.length} MCQs from "${file.name}"!`
+          });
+          setActiveTab('editor');
+          return;
+        }
+      } else if (file.type === 'application/pdf' || file.name.endsWith('.pdf')) {
+        const result = await extractFromPdfFile(file, undefined, (progress) => {
+          setExtractionLog({
+            status: 'info',
+            message: `${progress.statusText} (${progress.percentage}%)`
+          });
+        });
 
-        for (let i = 1; i <= pdf.numPages; i++) {
-          const page = await pdf.getPage(i);
-          const textContent = await page.getTextContent();
-          const pageText = textContent.items.map((item) => item.str).join(' ');
-          fullExtractedText += `\n--- Page ${i} ---\n` + pageText;
+        if (result.isScanned && result.directQuestions && result.directQuestions.length > 0) {
+          const directQs = result.directQuestions.map((q, idx) => ({
+            id: questions.length + idx + 1,
+            question: q.question,
+            options: q.options,
+            correctAnswer: q.correctAnswer,
+            explanation: q.explanation || 'Detailed step-by-step NCERT solution.',
+            chapter: q.chapter || subject
+          }));
+          setQuestions((prev) => [...prev, ...directQs]);
+          setExtractionLog({
+            status: 'success',
+            message: `Scanned PDF detected! Gemini Vision ne ${directQs.length} MCQs successfully extract kar diye!`
+          });
+          setActiveTab('editor');
+          return;
         }
 
-        setRawText(fullExtractedText);
-        const parsed = parseMCQText(fullExtractedText);
+        setRawText(result.text);
+        const parsed = parseMCQText(result.text);
         
         if (parsed.length > 0) {
           setQuestions((prev) => [...prev, ...parsed]);
           setExtractionLog({
             status: 'success',
-            message: `Successfully extracted ${parsed.length} MCQs across ${pdf.numPages} pages!`
+            message: `Successfully extracted ${parsed.length} MCQs from PDF!`
           });
           setActiveTab('editor');
         } else {
           setExtractionLog({
             status: 'warning',
-            message: `Found text from ${pdf.numPages} pages, but could not detect standard (Q1, (A)(B)(C)(D)) patterns automatically. You can review the raw text below or adjust formatting.`
+            message: `Extracted ${result.text.length} characters of clean text. You can review the raw text below or click "Gemini AI Creator" tab for automatic AI parsing.`
           });
         }
       } else {
@@ -538,12 +972,22 @@ export const CustomTestBuilder = ({ onBack, onTestCreated, existingTest = null }
             {/* Right Action Bar */}
             <div className="flex items-center gap-3">
               <button
+                id="builder-json-top-btn"
+                onClick={() => setActiveTab('json')}
+                className="hidden sm:flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold text-violet-700 bg-violet-50 hover:bg-violet-100 border border-violet-200 cursor-pointer transition-colors"
+                title="Import or Export JSON"
+              >
+                <Braces className="w-4 h-4 text-violet-600" />
+                <span>JSON Import / Export</span>
+              </button>
+
+              <button
                 id="builder-load-sample-btn"
                 onClick={handleLoadSample}
-                className="hidden sm:flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold text-violet-700 bg-violet-50 hover:bg-violet-100 border border-violet-200 cursor-pointer transition-colors"
+                className="hidden md:flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold text-slate-700 bg-slate-100 hover:bg-slate-200 border border-slate-200 cursor-pointer transition-colors"
               >
-                <Sparkles className="w-4 h-4 text-violet-600" />
-                <span>Load Sample MCQs</span>
+                <Sparkles className="w-4 h-4 text-slate-600" />
+                <span>Sample MCQs</span>
               </button>
 
               <button
@@ -782,6 +1226,19 @@ export const CustomTestBuilder = ({ onBack, onTestCreated, existingTest = null }
           </button>
 
           <button
+            id="tab-json-import-btn"
+            onClick={() => setActiveTab('json')}
+            className={`px-5 py-3 font-bold text-xs sm:text-sm border-b-2 flex items-center gap-2 cursor-pointer transition-colors whitespace-nowrap ${
+              activeTab === 'json'
+                ? 'border-violet-600 text-violet-700 bg-violet-50/50'
+                : 'border-transparent text-slate-500 hover:text-slate-900'
+            }`}
+          >
+            <Braces className="w-4 h-4 text-violet-600" />
+            <span>📄 JSON File &amp; Text Import</span>
+          </button>
+
+          <button
             onClick={() => setActiveTab('extractor')}
             className={`px-5 py-3 font-bold text-xs sm:text-sm border-b-2 flex items-center gap-2 cursor-pointer transition-colors whitespace-nowrap ${
               activeTab === 'extractor'
@@ -818,6 +1275,276 @@ export const CustomTestBuilder = ({ onBack, onTestCreated, existingTest = null }
           </section>
         )}
 
+        {/* TAB: JSON FILE & TEXT IMPORT */}
+        {activeTab === 'json' && (
+          <section className="space-y-6">
+            <div className="bg-white rounded-3xl p-6 sm:p-8 border border-slate-200 shadow-xs space-y-6">
+              
+              {/* Header */}
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-100 pb-4">
+                <div>
+                  <h2 className="text-base sm:text-lg font-extrabold text-slate-900 flex items-center gap-2">
+                    <Braces className="w-5 h-5 text-violet-600" />
+                    <span>JSON File Upload &amp; Raw JSON Text Import</span>
+                  </h2>
+                  <p className="text-xs text-slate-500 mt-0.5">
+                    Generate tests directly from standard JSON files or paste raw JSON arrays and test objects.
+                  </p>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    onClick={handleDownloadSampleJson}
+                    className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded-xl flex items-center gap-1.5 transition-colors cursor-pointer"
+                    title="Download template .json file"
+                  >
+                    <Download className="w-3.5 h-3.5 text-slate-600" />
+                    <span>Download JSON Template</span>
+                  </button>
+
+                  {questions.length > 0 && (
+                    <button
+                      onClick={handleExportCurrentTestJson}
+                      className="px-3 py-1.5 bg-violet-50 hover:bg-violet-100 text-violet-700 text-xs font-bold rounded-xl border border-violet-200 flex items-center gap-1.5 transition-colors cursor-pointer"
+                      title="Export current test as JSON"
+                    >
+                      <FileCode className="w-3.5 h-3.5 text-violet-600" />
+                      <span>Export Test ({questions.length} MCQs)</span>
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              {/* 1. Drag & Drop JSON File Target */}
+              <div className="space-y-2">
+                <label className="text-xs font-bold text-slate-700 flex items-center justify-between">
+                  <span>Option 1: Upload JSON File (.json)</span>
+                  <span className="text-[11px] font-medium text-slate-400">Supports UTF-8 JSON files</span>
+                </label>
+
+                <div 
+                  onClick={() => jsonFileInputRef.current?.click()}
+                  className="border-2 border-dashed border-violet-200 hover:border-violet-500 rounded-3xl p-6 text-center bg-violet-50/20 hover:bg-violet-50/60 transition-all cursor-pointer group"
+                >
+                  <input
+                    ref={jsonFileInputRef}
+                    type="file"
+                    accept=".json,application/json"
+                    onChange={handleJsonFileUpload}
+                    className="hidden"
+                  />
+                  
+                  <div className="w-12 h-12 rounded-2xl bg-white text-violet-600 shadow-md flex items-center justify-center mx-auto mb-2 group-hover:scale-110 transition-transform">
+                    <FileCode className="w-6 h-6" />
+                  </div>
+
+                  <h3 className="text-sm font-bold text-slate-800">
+                    {jsonFileName ? `Selected: ${jsonFileName}` : 'Click or Drag & Drop .json Question File'}
+                  </h3>
+                  <p className="text-xs text-slate-500 mt-1 max-w-md mx-auto">
+                    Accepts NEET Mock Test JSON objects or questions arrays with (A, B, C, D) options and answers.
+                  </p>
+
+                  {isProcessingJson && (
+                    <div className="mt-3 inline-flex items-center gap-2 px-3 py-1.5 rounded-xl bg-violet-600 text-white text-xs font-bold animate-pulse">
+                      <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                      <span>Parsing JSON format...</span>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* 2. Raw JSON Text Editor */}
+              <div className="space-y-3 pt-2">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                  <label className="text-xs font-bold text-slate-700 flex items-center gap-1.5">
+                    <span>Option 2: Paste Raw JSON Text:</span>
+                  </label>
+
+                  {/* Sample Template Buttons */}
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <span className="text-[11px] text-slate-400 mr-1">Load Template:</span>
+                    <button
+                      type="button"
+                      onClick={() => handleLoadSampleJson('full')}
+                      className="px-2.5 py-1 bg-violet-100 hover:bg-violet-200 text-violet-800 text-[11px] font-bold rounded-lg transition-colors cursor-pointer"
+                    >
+                      Full Test Object
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleLoadSampleJson('array')}
+                      className="px-2.5 py-1 bg-slate-100 hover:bg-slate-200 text-slate-800 text-[11px] font-bold rounded-lg transition-colors cursor-pointer"
+                    >
+                      Questions Array
+                    </button>
+                    {jsonText && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          try {
+                            const formatted = JSON.stringify(JSON.parse(jsonText), null, 2);
+                            setJsonText(formatted);
+                          } catch (e) {
+                            alert('JSON is currently invalid, cannot beautify.');
+                          }
+                        }}
+                        className="px-2.5 py-1 bg-amber-50 hover:bg-amber-100 text-amber-800 text-[11px] font-bold rounded-lg border border-amber-200 transition-colors cursor-pointer"
+                        title="Beautify / Format JSON indentation"
+                      >
+                        Format JSON
+                      </button>
+                    )}
+                  </div>
+                </div>
+
+                <textarea
+                  rows={10}
+                  value={jsonText}
+                  onChange={(e) => {
+                    setJsonText(e.target.value);
+                    if (jsonValidationLog) setJsonValidationLog(null);
+                  }}
+                  placeholder='Paste JSON here... e.g. { "title": "NEET 2026 Test", "questions": [ { "question": "...", "options": ["A", "B", "C", "D"], "correctAnswer": 1, "explanation": "..." } ] }'
+                  className="w-full p-4 text-xs font-mono bg-slate-950 text-emerald-400 border border-slate-800 rounded-2xl focus:outline-none focus:ring-2 focus:ring-violet-500 shadow-inner"
+                />
+
+                {/* Import Settings Bar */}
+                <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                  <div className="flex flex-wrap items-center gap-4 text-xs">
+                    
+                    {/* Import Mode Radio */}
+                    <div className="flex items-center gap-2">
+                      <span className="font-bold text-slate-700">Import Mode:</span>
+                      <label className="flex items-center gap-1 cursor-pointer">
+                        <input
+                          type="radio"
+                          name="importMode"
+                          value="replace"
+                          checked={jsonImportMode === 'replace'}
+                          onChange={() => setJsonImportMode('replace')}
+                          className="text-violet-600 focus:ring-violet-500"
+                        />
+                        <span className="text-slate-700">Replace All ({questions.length})</span>
+                      </label>
+                      <label className="flex items-center gap-1 cursor-pointer">
+                        <input
+                          type="radio"
+                          name="importMode"
+                          value="append"
+                          checked={jsonImportMode === 'append'}
+                          onChange={() => setJsonImportMode('append')}
+                          className="text-violet-600 focus:ring-violet-500"
+                        />
+                        <span className="text-slate-700">Append to Current</span>
+                      </label>
+                    </div>
+
+                    {/* Apply Metadata Checkbox */}
+                    <label className="flex items-center gap-1.5 cursor-pointer font-medium text-slate-700 border-l border-slate-200 pl-4">
+                      <input
+                        type="checkbox"
+                        checked={jsonApplyMetadata}
+                        onChange={(e) => setJsonApplyMetadata(e.target.checked)}
+                        className="rounded text-violet-600 focus:ring-violet-500"
+                      />
+                      <span>Auto-apply Title &amp; Subject from JSON</span>
+                    </label>
+
+                  </div>
+
+                  <div className="flex items-center justify-end gap-2.5">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setJsonText('');
+                        setJsonFileName('');
+                        setJsonValidationLog(null);
+                      }}
+                      className="px-3.5 py-2 text-xs font-bold text-slate-500 hover:text-slate-800 cursor-pointer"
+                    >
+                      Clear
+                    </button>
+
+                    <button
+                      id="builder-apply-json-btn"
+                      type="button"
+                      onClick={handleApplyJsonImport}
+                      disabled={!jsonText.trim() || isProcessingJson}
+                      className="px-6 py-2.5 bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-700 hover:to-indigo-700 text-white font-bold text-xs sm:text-sm rounded-xl shadow-md shadow-violet-600/20 flex items-center gap-2 cursor-pointer transition-all active:scale-98 disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      <Check className="w-4 h-4" />
+                      <span>Apply &amp; Generate Test</span>
+                    </button>
+                  </div>
+                </div>
+
+              </div>
+
+              {/* JSON Validation & Preview Banner */}
+              {jsonValidationLog && (
+                <div className={`p-4 rounded-2xl border text-xs sm:text-sm font-semibold flex flex-col sm:flex-row sm:items-center justify-between gap-3 ${
+                  jsonValidationLog.status === 'success'
+                    ? 'bg-emerald-50 border-emerald-200 text-emerald-900'
+                    : 'bg-rose-50 border-rose-200 text-rose-900'
+                }`}>
+                  <div className="flex items-center gap-3">
+                    {jsonValidationLog.status === 'success' ? (
+                      <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0" />
+                    ) : (
+                      <AlertCircle className="w-5 h-5 text-rose-600 shrink-0" />
+                    )}
+                    <div>
+                      <p>{jsonValidationLog.message}</p>
+                      {jsonValidationLog.metadata && jsonValidationLog.metadata.title && (
+                        <p className="text-[11px] text-emerald-700 font-normal mt-0.5">
+                          Metadata: Subject: <strong>{jsonValidationLog.metadata.subject || 'Biology'}</strong> • Duration: <strong>{jsonValidationLog.metadata.durationMinutes || 45} mins</strong>
+                        </p>
+                      )}
+                    </div>
+                  </div>
+
+                  {jsonValidationLog.status === 'success' && (
+                    <button
+                      onClick={handleApplyJsonImport}
+                      className="px-4 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold rounded-xl shadow-xs shrink-0 cursor-pointer"
+                    >
+                      Apply Now
+                    </button>
+                  )}
+                </div>
+              )}
+
+              {/* JSON Format Guide / Reference Table */}
+              <div className="p-4 rounded-2xl bg-slate-50 border border-slate-200 text-xs space-y-2 text-slate-600">
+                <p className="font-bold text-slate-800 flex items-center gap-1.5">
+                  <HelpCircle className="w-4 h-4 text-violet-600" />
+                  <span>Supported JSON Format Specification:</span>
+                </p>
+                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3 pt-1 text-[11px]">
+                  <div className="bg-white p-3 rounded-xl border border-slate-200">
+                    <strong className="text-violet-700 block mb-1">`question`</strong>
+                    <span>Text prompt of the question (String)</span>
+                  </div>
+                  <div className="bg-white p-3 rounded-xl border border-slate-200">
+                    <strong className="text-violet-700 block mb-1">`options`</strong>
+                    <span>Array of 4 strings or key-value object (A, B, C, D)</span>
+                  </div>
+                  <div className="bg-white p-3 rounded-xl border border-slate-200">
+                    <strong className="text-violet-700 block mb-1">`correctAnswer`</strong>
+                    <span>0, 1, 2, 3 or "A", "B", "C", "D" (or 1, 2, 3, 4)</span>
+                  </div>
+                  <div className="bg-white p-3 rounded-xl border border-slate-200">
+                    <strong className="text-violet-700 block mb-1">`explanation`</strong>
+                    <span>NCERT theory and step-by-step reasoning</span>
+                  </div>
+                </div>
+              </div>
+
+            </div>
+          </section>
+        )}
+
         {/* TAB 1: QUESTION EDITOR TABLE */}
         {activeTab === 'editor' && (
           <section className="space-y-4">
@@ -834,22 +1561,30 @@ export const CustomTestBuilder = ({ onBack, onTestCreated, existingTest = null }
                 </span>
               </div>
 
-              <div className="flex items-center gap-2.5">
+              <div className="flex flex-wrap items-center gap-2">
                 <button
                   id="builder-add-manual-btn"
                   onClick={handleOpenAddManual}
-                  className="px-4 py-2 bg-violet-600 hover:bg-violet-700 active:scale-98 text-white font-bold text-xs rounded-xl shadow-xs flex items-center gap-1.5 cursor-pointer transition-all"
+                  className="px-3.5 py-2 bg-violet-600 hover:bg-violet-700 active:scale-98 text-white font-bold text-xs rounded-xl shadow-xs flex items-center gap-1.5 cursor-pointer transition-all"
                 >
                   <Plus className="w-4 h-4" />
-                  <span>Add Question Manually</span>
+                  <span>Add Manual MCQ</span>
+                </button>
+
+                <button
+                  onClick={() => setActiveTab('json')}
+                  className="px-3.5 py-2 bg-violet-50 hover:bg-violet-100 text-violet-700 font-bold text-xs rounded-xl border border-violet-200 flex items-center gap-1.5 cursor-pointer transition-colors"
+                >
+                  <Braces className="w-4 h-4" />
+                  <span>Import / Export JSON</span>
                 </button>
 
                 <button
                   onClick={() => setActiveTab('extractor')}
-                  className="px-3.5 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs rounded-xl flex items-center gap-1.5 cursor-pointer transition-colors"
+                  className="px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs rounded-xl flex items-center gap-1.5 cursor-pointer transition-colors"
                 >
                   <FileUp className="w-4 h-4" />
-                  <span>Extract from PDF / Text</span>
+                  <span>PDF Extractor</span>
                 </button>
 
                 {questions.length > 0 && (
@@ -994,8 +1729,15 @@ export const CustomTestBuilder = ({ onBack, onTestCreated, existingTest = null }
                 </div>
                 <div className="flex flex-wrap items-center justify-center gap-3 pt-2">
                   <button
-                    onClick={() => setActiveTab('extractor')}
+                    onClick={() => setActiveTab('json')}
                     className="px-4 py-2.5 bg-violet-600 hover:bg-violet-700 text-white text-xs font-bold rounded-xl shadow-xs flex items-center gap-1.5 cursor-pointer"
+                  >
+                    <Braces className="w-4 h-4" />
+                    <span>Import from JSON (File/Text)</span>
+                  </button>
+                  <button
+                    onClick={() => setActiveTab('extractor')}
+                    className="px-4 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-800 text-xs font-bold rounded-xl flex items-center gap-1.5 cursor-pointer"
                   >
                     <Upload className="w-4 h-4" />
                     <span>Upload PDF to Auto-Extract</span>

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
   Dna, 
   Sparkles, 
@@ -21,19 +21,69 @@ import { TestDetailsModal } from './components/TestDetailsModal';
 import { AuthModal } from './components/AuthModal';
 import { StudentDashboard } from './components/StudentDashboard';
 import { TeacherDashboard } from './components/TeacherDashboard';
+import { TeacherLoginPage } from './components/TeacherLoginPage';
+import { ToastProvider, useToast } from './components/Toast';
 
 import { MOCK_TESTS, INSTITUTE_INFO } from './data/mockTests';
 import { TestItem, TestCategory, Difficulty, UserProfile } from './types';
 
-export default function App() {
+function MainAppContent() {
   // Navigation active section tracking
   const [activeSection, setActiveSection] = useState<string>('hero');
 
-  // User state
-  const [user, setUser] = useState<UserProfile | null>(null);
+  // User session state restored from localStorage
+  const [user, setUser] = useState<UserProfile | null>(() => {
+    try {
+      const savedUser = localStorage.getItem('asi_user_session');
+      if (savedUser) {
+        return JSON.parse(savedUser);
+      }
+    } catch (e) {
+      console.warn('Session load error:', e);
+    }
+    return null;
+  });
 
-  // App View State: 'home' or 'dashboard'
-  const [currentView, setCurrentView] = useState<'home' | 'dashboard'>('home');
+  // Current Route: 'home' | 'teacher-login' | 'dashboard'
+  const [currentRoute, setCurrentRoute] = useState<'home' | 'teacher-login' | 'dashboard'>(() => {
+    if (typeof window !== 'undefined') {
+      const hash = window.location.hash;
+      const path = window.location.pathname;
+      if (hash.includes('teacher-login') || path.includes('teacher-login')) {
+        return 'teacher-login';
+      }
+    }
+    return 'home';
+  });
+
+  // Listen to hash changes for smooth navigation
+  useEffect(() => {
+    const handleHashChange = () => {
+      const hash = window.location.hash;
+      if (hash.includes('teacher-login')) {
+        setCurrentRoute('teacher-login');
+      } else if (hash.includes('dashboard')) {
+        setCurrentRoute('dashboard');
+      } else {
+        setCurrentRoute('home');
+      }
+    };
+
+    window.addEventListener('hashchange', handleHashChange);
+    return () => window.removeEventListener('hashchange', handleHashChange);
+  }, []);
+
+  // Sync user state with localStorage
+  const handleSetUser = (newUser: UserProfile | null) => {
+    setUser(newUser);
+    if (newUser) {
+      localStorage.setItem('asi_user_session', JSON.stringify(newUser));
+    } else {
+      localStorage.removeItem('asi_user_session');
+      localStorage.removeItem('asi_teacher_token');
+      localStorage.removeItem('asi_auth_role');
+    }
+  };
 
   // Test pool state (Default mock tests + custom published tests)
   const [allTests, setAllTests] = useState<TestItem[]>(() => {
@@ -50,7 +100,7 @@ export default function App() {
     return MOCK_TESTS;
   });
 
-  // Auth modal state
+  // Auth modal state for students
   const [authModalOpen, setAuthModalOpen] = useState(false);
   const [authMode, setAuthMode] = useState<'login' | 'signup'>('login');
 
@@ -73,8 +123,9 @@ export default function App() {
 
   // Navigation scroll handler
   const handleNavigate = (sectionId: string) => {
-    if (currentView === 'dashboard') {
-      setCurrentView('home');
+    if (currentRoute !== 'home') {
+      window.location.hash = '#';
+      setCurrentRoute('home');
       setTimeout(() => {
         const element = document.getElementById(sectionId);
         if (element) {
@@ -97,26 +148,32 @@ export default function App() {
   };
 
   const handleLogout = () => {
-    setUser(null);
-    setCurrentView('home');
+    handleSetUser(null);
+    window.location.hash = '#';
+    setCurrentRoute('home');
   };
 
   const handleLoginSuccess = (userProfile: UserProfile) => {
-    setUser(userProfile);
-    setCurrentView('dashboard');
+    handleSetUser(userProfile);
+    window.location.hash = '#dashboard';
+    setCurrentRoute('dashboard');
+  };
+
+  // Teacher Login Success Handler
+  const handleTeacherLoginSuccess = (teacherProfile: UserProfile) => {
+    handleSetUser(teacherProfile);
+    window.location.hash = '#dashboard';
+    setCurrentRoute('dashboard');
   };
 
   // Filter tests logic
   const filteredTests = allTests.filter((test) => {
-    // Category match
     if (selectedCategory !== 'All' && test.category !== selectedCategory) {
       return false;
     }
-    // Difficulty match
     if (selectedDifficulty !== 'All' && test.difficulty !== selectedDifficulty) {
       return false;
     }
-    // Search query match
     if (searchQuery.trim()) {
       const q = searchQuery.toLowerCase();
       const matchTitle = test.title.toLowerCase().includes(q);
@@ -129,8 +186,26 @@ export default function App() {
     return true;
   });
 
-  // If user is logged in and viewing the dashboard
-  if (user && user.isLoggedIn && currentView === 'dashboard') {
+  // 1. If viewing dedicated /teacher-login route
+  if (currentRoute === 'teacher-login') {
+    // If already logged in as teacher, redirect directly to dashboard
+    if (user && user.isLoggedIn && user.role === 'teacher') {
+      setCurrentRoute('dashboard');
+    } else {
+      return (
+        <TeacherLoginPage
+          onLoginSuccess={handleTeacherLoginSuccess}
+          onGoHome={() => {
+            window.location.hash = '#';
+            setCurrentRoute('home');
+          }}
+        />
+      );
+    }
+  }
+
+  // 2. If logged in and viewing the dashboard
+  if (user && user.isLoggedIn && currentRoute === 'dashboard') {
     return (
       <>
         {user.role === 'teacher' ? (
@@ -138,7 +213,10 @@ export default function App() {
             user={user}
             tests={allTests}
             onLogout={handleLogout}
-            onGoHome={() => setCurrentView('home')}
+            onGoHome={() => {
+              window.location.hash = '#';
+              setCurrentRoute('home');
+            }}
             onPreviewTest={(test) => setActiveTestForTaking(test)}
             onUpdateTests={(updated) => setAllTests(updated)}
           />
@@ -149,7 +227,10 @@ export default function App() {
             onStartTest={(test) => setActiveTestForTaking(test)}
             onViewDetails={(test) => setActiveTestForDetails(test)}
             onLogout={handleLogout}
-            onGoHome={() => setCurrentView('home')}
+            onGoHome={() => {
+              window.location.hash = '#';
+              setCurrentRoute('home');
+            }}
           />
         )}
 
@@ -176,6 +257,7 @@ export default function App() {
     );
   }
 
+  // 3. Public Home / Landing View
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900 font-sans selection:bg-violet-200 selection:text-violet-900 flex flex-col">
       
@@ -185,7 +267,10 @@ export default function App() {
         onOpenAuth={handleOpenAuth}
         onLogout={handleLogout}
         onNavigate={handleNavigate}
-        onOpenDashboard={() => setCurrentView('dashboard')}
+        onOpenDashboard={() => {
+          window.location.hash = '#dashboard';
+          setCurrentRoute('dashboard');
+        }}
         activeSection={activeSection}
       />
 
@@ -198,7 +283,7 @@ export default function App() {
           onStartQuickMock={() => setActiveTestForTaking(MOCK_TESTS[0])}
         />
 
-        {/* 3. Available Online Tests Section (Most Important) */}
+        {/* 3. Available Online Tests Section */}
         <section 
           id="tests-section"
           className="py-16 sm:py-24 max-w-7xl mx-auto px-4 sm:px-6 lg:px-8"
@@ -237,7 +322,7 @@ export default function App() {
             totalMatches={filteredTests.length}
           />
 
-          {/* Responsive Test Cards Grid (Showing 4+ cards) */}
+          {/* Responsive Test Cards Grid */}
           {filteredTests.length > 0 ? (
             <div 
               id="available-tests-grid"
@@ -339,5 +424,13 @@ export default function App() {
       )}
 
     </div>
+  );
+}
+
+export default function App() {
+  return (
+    <ToastProvider>
+      <MainAppContent />
+    </ToastProvider>
   );
 }
