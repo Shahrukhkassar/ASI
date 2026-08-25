@@ -1,0 +1,24 @@
+herename: Build Android APK
+
+on:
+  push:
+    branches: [ main ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      
+      - name: Build PWA APK with PWABuilder
+        uses: pwa-builder/pwa-builder-action@v1
+        with:
+          url: https://asi-git-main-shahrukhkassars-projects.vercel.app
+          packageId: com.asi.studyapp
+          name: ASI Study
+          
+      - name: Upload APK
+        uses: actions/upload-artifact@v3
+        with:
+          name: app-apk
+          path: output/android/app.apk
