@@ -1,256 +1,448 @@
-  const isScanned = avgCharsPerPage < 100; // Heuristic for scanned PDF
+hereimport express from "express";
+import path from "path";
+import { createServer as createViteServer } from "vite";
+import { GoogleGenAI } from "@google/genai";
+import dotenv from "dotenv";
 
-  const clean = fullText
-   .replace(/[\t]{2,}/g, " ")
-   .replace(/ {3,}/g, " ")
-   .replace(/(\w)-\n(\w)/g, "$1$2")
-   .trim();
+dotenv.config();
 
-  return { text: clean, pages: pdf.numPages, isScanned };
+// ===== YEH FIX JODA HAI - ULTI PDF FIX =====
+async function cleanJumbledPdfText(jumbledText: string): Promise<string> {
+  if (!jumbledText || jumbledText.length < 20) return jumbledText;
+  // Agar text already sahi hai to wapas bhej do
+  // Agar ulta hai to Gemini se hi sahi karwa lenge - ye sabse stable hai
+  return jumbledText
+    .split('\n')
+    .map(line => line.trim())
+    .filter(Boolean)
+    .join('\n')
+    .replace(/\s{2,}/g, ' ')
+    .trim();
 }
 
-// ================= VALIDATION SCHEMAS =================
-const generateTestSchema = z.object({
-  prompt: z.string().optional(),
-  pdfText: z.string().optional(),
-  apiKey: z.string().optional(),
-  count: z.number().min(1).max(50).optional().default(15),
-}).refine(data => data.prompt || data.pdfText, { message: "Prompt or pdfText required" });
-
-// ================= ROUTES =================
-
-app.get("/api/health", (req, res) => {
-  res.json({ status: "ok", uptime: process.uptime(), timestamp: new Date().toISOString(), version: "3.0-advanced" });
-});
-
-app.post("/api/teacher-auth", (req, res) => {
-  try {
-    const { email, password } = req.body;
-    const expected = process.env.TEACHER_PASSWORD || process.env.TEACHER_ACCESS_KEY || "ASI@2025";
-    if (!password || password.trim()!== expected.trim()) {
-      return res.status(401).json({ success: false, error: "Galat password! Access denied." });
-    }
-    const facultyEmail = email?.trim() || "amerj.sir@asi-institute.edu";
-    return res.json({
-      success: true,
-      user: {
-        name: "Amerj Sir", email: facultyEmail, role: "teacher",
-        department: "Head of NEET & JEE Biology", isLoggedIn: true,
-        token: "ASI_FACULTY_" + Buffer.from(facultyEmail + Date.now()).toString("base64")
-      }
-    });
-  } catch (err: any) {
-    return res.status(500).json({ success: false, error: err.message });
+function getGeminiClient(customKey?: string): GoogleGenAI {
+  const key = customKey?.trim() || process.env.GEMINI_API_KEY || process.env.VITE_GEMINI_API_KEY;
+  if (!key) {
+    throw new Error("API Key missing in Vercel Settings / Environment. Please configure GEMINI_API_KEY.");
   }
-});
+  return new GoogleGenAI({ apiKey: key });
+}
 
-// ULTIMATE PDF ROUTE
-app.post("/api/parse-pdf-upload", upload.single("pdf"), async (req, res) => {
-  try {
-    if (!req.file) return res.status(400).json({ error: "PDF file missing. Field name should be 'pdf'" });
-    const { apiKey, count = 15 } = req.body;
+async function startServer() {
+  const app = express();
+  const PORT = 3000;
 
-    console.log(`[PDF] Processing ${req.file.originalname} - ${ (req.file.size/1024).toFixed(1)}KB`);
-    const { text: cleanText, pages, isScanned } = await parsePdfAdvanced(req.file.buffer);
-    console.log(`[PDF] Extracted ${cleanText.length} chars from ${pages} pages. Scanned: ${isScanned}`);
+  app.use(express.json({ limit: "50mb" }));
+  app.use(express.urlencoded({ extended: true, limit: "50mb" }));
 
-    if (isScanned || cleanText.length < 100) {
-      return res.status(422).json({
-        success: false,
-        isScanned: true,
-        error: "Ye scanned PDF hai. Isme text layer nahi hai. Frontend se /api/extract-pdf-vision use karo (images bhej ke).",
-        extractedLength: cleanText.length
+  // Health check
+  app.get("/api/health", (req, res) => {
+    res.json({ status: "ok", timestamp: new Date().toISOString() });
+  });
+
+  // 1. Teacher Secure Login Endpoint
+  app.post("/api/teacher-auth", (req, res) => {
+    try {
+      const { email, password } = req.body;
+      const expectedPassword = process.env.TEACHER_PASSWORD || process.env.TEACHER_ACCESS_KEY || "ASI@2025";
+
+      if (!password || password.trim() !== expectedPassword.trim()) {
+        return res.status(401).json({
+          success: false,
+          error: "Galat password! (Invalid Teacher Access Key). Access denied."
+        });
+      }
+
+      const facultyEmail = email?.trim() || "amerj.sir@asi-institute.edu";
+      return res.json({
+        success: true,
+        user: {
+          name: "Amerj Sir",
+          email: facultyEmail,
+          role: "teacher",
+          department: "Head of NEET & JEE Biology",
+          isLoggedIn: true,
+          token: "ASI_FACULTY_" + Buffer.from(facultyEmail + Date.now()).toString("base64")
+        }
+      });
+    } catch (err: any) {
+      return res.status(500).json({ success: false, error: err.message || "Auth error" });
+    }
+  });
+
+  // 2. Scanned PDF Vision OCR Endpoint (Using Gemini Vision for Image-based PDFs)
+  app.post("/api/extract-pdf-vision", async (req, res) => {
+    try {
+      const { images, apiKey } = req.body;
+
+      if (!images || !Array.isArray(images) || images.length === 0) {
+        return res.status(400).json({ error: "Scanned PDF page images required." });
+      }
+
+      const ai = getGeminiClient(apiKey);
+      const visionPrompt = `You are an expert NEET/JEE paper extractor and OCR transcription specialist.
+Read all questions from the provided scanned exam paper images.
+Extract every MCQ question accurately with all 4 options, identify correct answer if indicated, and provide NCERT explanation in Hinglish.
+
+Return ONLY a valid JSON array matching this exact schema:
+[
+  {
+    "question": "Exact question text from the scanned image",
+    "options": ["Option A text", "Option B text", "Option C text", "Option D text"],
+    "answer": 0,
+    "explanation_hinglish": "NCERT based explanation in Hinglish",
+    "topic": "Topic or Subject",
+    "difficulty": "Medium"
+  }
+]
+
+Rules:
+- 'answer' must be integer index 0, 1, 2, or 3.
+- If options have (A), (B), (C), (D) or 1, 2, 3, 4, clean the option text.
+- Do NOT output markdown ticks, backticks, or preamble. Return pure JSON array.`;
+
+      const imageParts = images.slice(0, 8).map((imgUrl: string) => {
+        const matches = imgUrl.match(/^data:([^;]+);base64,(.+)$/);
+        if (matches) {
+          return {
+            inlineData: {
+              mimeType: matches[1],
+              data: matches[2]
+            }
+          };
+        }
+        return {
+          inlineData: {
+            mimeType: "image/jpeg",
+            data: imgUrl
+          }
+        };
+      });
+
+      const response = await ai.models.generateContent({
+        model: "gemini-2.5-flash",
+        contents: [
+          {
+            role: "user",
+            parts: [
+              { text: visionPrompt },
+              ...imageParts
+            ]
+          }
+        ],
+        config: {
+          responseMimeType: "application/json"
+        }
+      });
+
+      const responseText = response.text || "";
+      const cleaned = responseText.replace(/```json|```/g, "").trim();
+      const parsedArray = JSON.parse(cleaned);
+
+      return res.json({ success: true, questions: parsedArray });
+    } catch (err: any) {
+      console.error("PDF Vision OCR error:", err);
+      return res.status(500).json({
+        error: err.message || "Failed to extract scanned PDF with Gemini Vision"
+      });
+    }
+  });
+
+  // 3. High Yield AI Generation Endpoint with Auto-Retry (2x) - YAHAN FIX LAGAYA HAI
+  app.post("/api/generate-gemini-test", async (req, res) => {
+    let { prompt, pdfText, apiKey, count } = req.body;
+
+    if (!prompt && !pdfText) {
+      return res.status(400).json({ error: "Prompt ya PDF text provide karein." });
+    }
+
+    // ===== FIX: PDF TEXT KO CLEAN KARO AGAR ULTA HAI TO =====
+    if (pdfText) {
+      pdfText = await cleanJumbledPdfText(pdfText);
+    }
+
+    let ai: GoogleGenAI;
+    try {
+      ai = getGeminiClient(apiKey);
+    } catch (keyErr: any) {
+      return res.status(401).json({
+        error: "API Key missing in Vercel Settings / Environment. Please configure GEMINI_API_KEY."
       });
     }
 
-    const ai = getGeminiClient(apiKey);
-    const prompt = `You are NTA NEET paper setter. From this PDF content, create ${count} high-yield MCQs.
-    SOURCE:
-    ${cleanText.slice(0, 40000)}
+    const systemPrompt = `You are an expert NEET/JEE paper setter. Create high-yield, NCERT-based MCQs only. Return ONLY valid JSON array: [{question, options:[4], answer, explanation_hinglish, topic, difficulty}]`;
 
-    Return ONLY JSON array: [{question, options:[4 strings], answer:0-3, explanation_hinglish, topic, difficulty}] No markdown.`;
+    const userMessage = `Create ${count || 15} high-yield MCQs for competitive exams (NEET / JEE / SSC).
+${pdfText ? `SOURCE PDF TEXT (extract strictly from this content, the text may be jumbled so reconstruct questions logically):\n${pdfText.slice(0, 30000)}` : `TOPIC / PROMPT:\n${prompt}`}
 
-    const response = await ai.models.generateContent({
-      model: "gemini-2.5-flash",
-      contents: [{ role: "user", parts: [{ text: prompt }] }],
-      config: { responseMimeType: "application/json" }
-    });
+Ensure:
+1. Every item is an object with 'question', 'options' (array of exactly 4 strings), 'answer' (0-3 integer), 'explanation_hinglish' (detailed NCERT solution in Hinglish), 'topic', and 'difficulty' ('Easy' | 'Medium' | 'Hard').
+2. If source text is jumbled/ulti, use your intelligence to reconstruct proper question and options.
+3. Return ONLY a valid JSON array without any markdown backticks.`;
 
-    let questionsArray: any[] = [];
-    try {
-      const cleaned = (response.text || "").replace(/```json|```/g, "").trim();
-      const parsed = JSON.parse(cleaned);
-      questionsArray = Array.isArray(parsed)? parsed : parsed.questions || Object.values(parsed).find(v => Array.isArray(v)) as any[] || [];
-    } catch (e) {
-      throw new Error("AI returned invalid JSON");
-    }
-
-    const formatted = questionsArray.map((q: any, idx: number) => ({
-      id: idx + 1,
-      question: q.question,
-      options: q.options?.slice(0, 4).map((o: any) => String(o).trim()) || [],
-      correctAnswer: typeof q.answer === 'number'? q.answer : 0,
-      explanation: q.explanation_hinglish || q.explanation || "NCERT based",
-      chapter: q.topic || "High Yield"
-    })).filter((q: any) => q.question && q.options.length === 4);
-
-    return res.json({
-      success: true,
-      meta: { pages, extractedChars: cleanText.length, originalFile: req.file.originalname },
-      extractedTextPreview: cleanText.slice(0, 2000),
-      test: {
-        title: `Custom Test: ${req.file.originalname.replace('.pdf','')}`,
-        subject: "Biology", category: "Custom PDF", duration: formatted.length * 2, difficulty: "Medium",
-        questions: formatted
-      }
-    });
-
-  } catch (err: any) {
-    console.error("[PDF Upload Error]", err);
-    return res.status(500).json({ error: err.message || "PDF processing failed" });
-  }
-});
-
-// Vision OCR
-app.post("/api/extract-pdf-vision", async (req, res) => {
-  try {
-    const { images, apiKey } = req.body;
-    if (!images ||!Array.isArray(images) || images.length === 0) return res.status(400).json({ error: "images[] required" });
-    const ai = getGeminiClient(apiKey);
-    const visionPrompt = `You are NEET paper OCR. Extract all MCQs. Return ONLY JSON array: [{question, options:[4], answer:0-3, explanation_hinglish, topic, difficulty}]`;
-    const imageParts = images.slice(0, 10).map((imgUrl: string) => {
-      const m = imgUrl.match(/^data:([^;]+);base64,(.+)$/);
-      return { inlineData: { mimeType: m? m[1] : "image/jpeg", data: m? m[2] : imgUrl } };
-    });
-    const response = await ai.models.generateContent({
-      model: "gemini-2.5-flash",
-      contents: [{ role: "user", parts: [{ text: visionPrompt },...imageParts] }],
-      config: { responseMimeType: "application/json" }
-    });
-    const cleaned = (response.text || "").replace(/```json|```/g, "").trim();
-    return res.json({ success: true, questions: JSON.parse(cleaned) });
-  } catch (err: any) {
-    return res.status(500).json({ error: err.message });
-  }
-});
-
-// Generate test (with validation)
-app.post("/api/generate-gemini-test", async (req, res) => {
-  try {
-    const parsed = generateTestSchema.safeParse(req.body);
-    if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0].message });
-    const { prompt, pdfText, apiKey, count } = parsed.data;
-
-    const ai = getGeminiClient(apiKey);
-    const userMessage = `Create ${count} high-yield NEET MCQs.
-    ${pdfText? `FROM PDF:\n${pdfText.slice(0, 40000)}` : `TOPIC: ${prompt}`}
-    Return ONLY valid JSON array with fields: question, options[4], answer(0-3), explanation_hinglish, topic, difficulty.`;
-
-    let lastError: any;
+    let lastError: any = null;
     for (let attempt = 1; attempt <= 3; attempt++) {
       try {
         const response = await ai.models.generateContent({
           model: "gemini-2.5-flash",
-          contents: [{ role: "user", parts: [{ text: userMessage }] }],
-          config: { responseMimeType: "application/json" }
+          contents: [
+            {
+              role: "user",
+              parts: [{ text: `${systemPrompt}\n\n${userMessage}${attempt > 1 ? "\n\nIMPORTANT: Previous response had invalid JSON. Output strict, valid JSON array only!" : ""}` }]
+            }
+          ],
+          config: {
+            responseMimeType: "application/json"
+          }
         });
-        const cleaned = (response.text || "").replace(/```json|```/g, "").trim();
-        let parsedJson = JSON.parse(cleaned);
-        let questionsArray = Array.isArray(parsedJson)? parsedJson : parsedJson.questions || Object.values(parsedJson).find(v => Array.isArray(v)) as any[] || [];
+
+        const responseText = response.text || "";
+        const cleaned = responseText.replace(/```json|```/g, "").trim();
+        let parsed = JSON.parse(cleaned);
+
+        let questionsArray = [];
+        if (Array.isArray(parsed)) {
+          questionsArray = parsed;
+        } else if (parsed && Array.isArray(parsed.questions)) {
+          questionsArray = parsed.questions;
+        } else if (parsed && typeof parsed === "object") {
+          const possibleArr = Object.values(parsed).find(v => Array.isArray(v));
+          if (possibleArr) questionsArray = possibleArr as any[];
+        }
 
         if (questionsArray.length > 0) {
-          const formatted = questionsArray.map((q: any, idx: number) => ({
-            id: idx + 1, question: q.question, options: q.options.slice(0,4).map((o:any)=>String(o).trim()),
-            correctAnswer: q.answer?? 0, explanation: q.explanation_hinglish || q.explanation || "NCERT concept", chapter: q.topic || "Biology"
+          const formattedQuestions = questionsArray.map((q: any, idx: number) => ({
+            id: idx + 1,
+            question: q.question || q.q || `Question ${idx + 1}`,
+            options: Array.isArray(q.options) && q.options.length >= 2
+              ? q.options.slice(0, 4).map((opt: any) => String(opt).trim())
+              : ["Option A", "Option B", "Option C", "Option D"],
+            correctAnswer: typeof q.answer === "number" ? q.answer : (typeof q.ans === "number" ? q.ans : 0),
+            explanation: q.explanation_hinglish || q.solution || q.explanation || "NCERT line-by-line concept.",
+            chapter: q.topic || "Biology High Yield"
           }));
-          return res.json({ success: true, test: { title: prompt? `Mock: ${prompt.slice(0,40)}` : "NEET Mock", subject: "Biology", category: "NEET", duration: formatted.length*1.5, difficulty: "Medium", questions: formatted } });
+
+          const testObj = {
+            title: (typeof parsed === "object" && !Array.isArray(parsed) && parsed.title) ? parsed.title : (prompt ? `High-Yield Mock: ${prompt.slice(0, 40)}` : "NEET High-Yield Biology Mock"),
+            subject: (typeof parsed === "object" && !Array.isArray(parsed) && parsed.subject) ? parsed.subject : "Biology",
+            category: (typeof parsed === "object" && !Array.isArray(parsed) && parsed.category) ? parsed.category : "NEET Full Syllabus",
+            duration: Math.max(15, Math.round(formattedQuestions.length * 1.5)),
+            difficulty: "Medium",
+            questions: formattedQuestions
+          };
+
+          return res.json({ success: true, test: testObj, rawQuestions: formattedQuestions });
         }
-      } catch (e: any) { lastError = e; }
+      } catch (err: any) {
+        lastError = err;
+        console.warn(`Gemini generation attempt ${attempt} failed:`, err.message);
+      }
     }
-    throw lastError;
-  } catch (err: any) {
-    return res.status(500).json({ error: err.message || "Generation failed" });
+
+    return res.status(500).json({
+      error: lastError?.message || "AI se valid JSON test generate nahi ho paya. Please try again."
+    });
+  });
+
+  // 4. Teacher AI Tools API
+  app.post("/api/ai/question-generator", async (req, res) => {
+    try {
+      const { topic, format, difficulty, count = 5, apiKey } = req.body;
+      const ai = getGeminiClient(apiKey);
+      const prompt = `You are a premier NTA NEET paper setter.
+Generate ${count} high-yield NEET Biology/Science MCQs based on:
+Topic/Content: "${topic || 'Cell Biology, Genetics, Human Physiology'}"
+Format: ${format || 'Single Choice MCQ (Standard NEET pattern)'}
+Difficulty Level: ${difficulty || 'NEET'}
+
+Return ONLY a valid JSON array:
+[
+  {
+    "question": "Question statement formatted strictly for NEET CBT",
+    "options": ["Option A", "Option B", "Option C", "Option D"],
+    "answer": 0,
+    "explanation_hinglish": "NCERT step-by-step concept explanation in Hinglish",
+    "ncertReference": "NCERT Class 11/12 Chapter Name, Page XX",
+    "chapter": "${topic || 'General Biology'}",
+    "difficulty": "${difficulty || 'Medium'}"
   }
-});
+]`;
+      const response = await ai.models.generateContent({
+        model: "gemini-2.5-flash",
+        contents: [{ role: "user", parts: [{ text: prompt }] }],
+        config: { responseMimeType: "application/json" }
+      });
+      const text = response.text || "[]";
+      const cleaned = text.replace(/```json|```/g, "").trim();
+      const parsed = JSON.parse(cleaned);
+      return res.json({ success: true, questions: Array.isArray(parsed) ? parsed : (parsed.questions || []) });
+    } catch (err: any) {
+      return res.status(500).json({ error: err.message || "Failed to generate questions." });
+    }
+  });
 
-// --- TERE SAARE /api/ai/* ROUTES SAME TO SAME ---
-app.post("/api/ai/question-generator", async (req, res) => {
-  try {
-    const { topic, format, difficulty, count = 5, apiKey } = req.body;
-    const ai = getGeminiClient(apiKey);
-    const prompt = `Generate ${count} NEET MCQs. Topic: ${topic}. Format: ${format}. Difficulty: ${difficulty}. Return JSON array: [{question, options[4], answer, explanation_hinglish, ncertReference, chapter, difficulty}]`;
-    const response = await ai.models.generateContent({ model: "gemini-2.5-flash", contents: [{ role: "user", parts: [{ text: prompt }] }], config: { responseMimeType: "application/json" } });
-    const parsed = JSON.parse((response.text||"[]").replace(/```json|```/g,"").trim());
-    return res.json({ success: true, questions: Array.isArray(parsed)? parsed : parsed.questions || [] });
-  } catch (err: any) { return res.status(500).json({ error: err.message }); }
-});
+  app.post("/api/ai/improve-question", async (req, res) => {
+    try {
+      const { question, options, correctAnswer, apiKey } = req.body;
+      const ai = getGeminiClient(apiKey);
+      const prompt = `You are an expert NEET question quality improver.
+Improve the following question while STRICTLY preserving the core scientific concept and original correct answer key (Option index ${correctAnswer}):
 
-app.post("/api/ai/improve-question", async (req, res) => {
-  try {
-    const { question, options, correctAnswer, apiKey } = req.body;
-    const ai = getGeminiClient(apiKey);
-    const prompt = `Improve this NEET question keeping answer index ${correctAnswer}. Q: ${question} Options: ${JSON.stringify(options)}. Return JSON: {improvedQuestion, improvedOptions[4], correctAnswer, explanation, ncertReference, changesMade}`;
-    const response = await ai.models.generateContent({ model: "gemini-2.5-flash", contents: [{ role: "user", parts: [{ text: prompt }] }], config: { responseMimeType: "application/json" } });
-    return res.json({ success: true,...JSON.parse((response.text||"{}").replace(/```json|```/g,"").trim()) });
-  } catch (err: any) { return res.status(500).json({ error: err.message }); }
-});
+Question: "${question}"
+Options: ${JSON.stringify(options)}
+Correct Answer Index: ${correctAnswer}
 
-app.post("/api/ai/quality-checker", async (req, res) => {
-  try {
-    const { questions, apiKey } = req.body;
-    const ai = getGeminiClient(apiKey);
-    const prompt = `Audit these NEET questions: ${JSON.stringify(questions)}. Return JSON: {qualityScore, overallVerdict, flags[], syllabusCoverage[], difficultyDistribution{}}`;
-    const response = await ai.models.generateContent({ model: "gemini-2.5-flash", contents: [{ role: "user", parts: [{ text: prompt }] }], config: { responseMimeType: "application/json" } });
-    return res.json({ success: true, audit: JSON.parse((response.text||"{}").replace(/```json|```/g,"").trim()) });
-  } catch (err: any) { return res.status(500).json({ error: err.message }); }
-});
+Return ONLY a valid JSON object:
+{
+  "improvedQuestion": "Refined question text",
+  "improvedOptions": ["Option A", "Option B", "Option C", "Option D"],
+  "correctAnswer": ${correctAnswer},
+  "explanation": "NCERT conceptual explanation in Hinglish",
+  "ncertReference": "NCERT reference",
+  "changesMade": "Summary of improvements made"
+}`;
+      const response = await ai.models.generateContent({
+        model: "gemini-2.5-flash",
+        contents: [{ role: "user", parts: [{ text: prompt }] }],
+        config: { responseMimeType: "application/json" }
+      });
+      const text = response.text || "{}";
+      const cleaned = text.replace(/```json|```/g, "").trim();
+      const parsed = JSON.parse(cleaned);
+      return res.json({ success: true, ...parsed });
+    } catch (err: any) {
+      return res.status(500).json({ error: err.message || "Failed to improve question." });
+    }
+  });
 
-app.post("/api/ai/performance-analysis", async (req, res) => {
-  try {
-    const { testTitle, totalAttempts, averageScore, studentMetrics, apiKey } = req.body;
-    const ai = getGeminiClient(apiKey);
-    const prompt = `Analyze NEET test performance: ${testTitle}, Attempts: ${totalAttempts}, Avg: ${averageScore}, Metrics: ${JSON.stringify(studentMetrics)}. Return JSON: {summary, weakChapters[], strongChapters[], timeAnalysis, difficultyAccuracy{}, actionableSuggestions[]}`;
-    const response = await ai.models.generateContent({ model: "gemini-2.5-flash", contents: [{ role: "user", parts: [{ text: prompt }] }], config: { responseMimeType: "application/json" } });
-    return res.json({ success: true, analysis: JSON.parse((response.text||"{}").replace(/```json|```/g,"").trim()) });
-  } catch (err: any) { return res.status(500).json({ error: err.message }); }
-});
+  app.post("/api/ai/quality-checker", async (req, res) => {
+    try {
+      const { questions, apiKey } = req.body;
+      const ai = getGeminiClient(apiKey);
+      const prompt = `You are an NTA NEET Paper Quality Auditor.
+Audit these questions:
+${JSON.stringify(questions)}
+Return ONLY valid JSON:
+{
+  "qualityScore": 92,
+  "overallVerdict": "High quality NEET paper with balanced distribution",
+  "flags": [
+    { "questionId": 1, "issue": "Option C could be slightly ambiguous", "suggestion": "Clarify enzyme substrate concentration condition." }
+  ],
+  "syllabusCoverage": ["Genetics: 40%", "Human Physiology: 35%", "Ecology: 25%"],
+  "difficultyDistribution": { "Easy": 3, "Medium": 5, "Hard": 2 }
+}`;
+      const response = await ai.models.generateContent({
+        model: "gemini-2.5-flash",
+        contents: [{ role: "user", parts: [{ text: prompt }] }],
+        config: { responseMimeType: "application/json" }
+      });
+      const text = response.text || "{}";
+      const cleaned = text.replace(/```json|```/g, "").trim();
+      const parsed = JSON.parse(cleaned);
+      return res.json({ success: true, audit: parsed });
+    } catch (err: any) {
+      return res.status(500).json({ error: err.message || "Quality check failed." });
+    }
+  });
 
-app.post("/api/ai/blueprint", async (req, res) => {
-  try {
-    const { subject, totalQuestions = 50, pattern = "NEET 2026", apiKey } = req.body;
-    const ai = getGeminiClient(apiKey);
-    const prompt = `Generate blueprint for ${subject} pattern ${pattern} total ${totalQuestions}. Return JSON: {patternName, sectionA{count, type, topics[]}, sectionB{count, type, topics[]}, cognitiveTaxonomy{}, recommendations}`;
-    const response = await ai.models.generateContent({ model: "gemini-2.5-flash", contents: [{ role: "user", parts: [{ text: prompt }] }], config: { responseMimeType: "application/json" } });
-    return res.json({ success: true, blueprint: JSON.parse((response.text||"{}").replace(/```json|```/g,"").trim()) });
-  } catch (err: any) { return res.status(500).json({ error: err.message }); }
-});
+  app.post("/api/ai/performance-analysis", async (req, res) => {
+    try {
+      const { testTitle, totalAttempts, averageScore, studentMetrics, apiKey } = req.body;
+      const ai = getGeminiClient(apiKey);
+      const prompt = `You are an AI NEET Academic Director & Performance Coach.
+Analyze the following student test cohort performance:
+Test: "${testTitle || 'NEET Full Syllabus Biology Mock'}"
+Total Student Attempts: ${totalAttempts || 1240}
+Average Score: ${averageScore || 260}/360
+Cohort Highlights: ${JSON.stringify(studentMetrics || {})}
+Return a comprehensive AI analysis as valid JSON:
+{
+  "summary": "Brief 2-sentence executive summary of batch performance",
+  "weakChapters": ["Genetics & Evolution (42% accuracy)", "Plant Physiology (48% accuracy)"],
+  "strongChapters": ["Human Reproduction (88% accuracy)", "Ecology (82% accuracy)"],
+  "timeAnalysis": "Average time per question was 45s, students rushed during Assertion-Reason questions leading to negative marks.",
+  "difficultyAccuracy": { "Easy": "91%", "Medium": "68%", "Hard": "34%" },
+  "actionableSuggestions": [
+    "Conduct a 1-hour dedicated live doubt-solving session on Pedigree Analysis & Linkage maps.",
+    "Share 20 high-yield Assertion-Reason practice questions for Plant Physiology."
+  ]
+}`;
+      const response = await ai.models.generateContent({
+        model: "gemini-2.5-flash",
+        contents: [{ role: "user", parts: [{ text: prompt }] }],
+        config: { responseMimeType: "application/json" }
+      });
+      const text = response.text || "{}";
+      const cleaned = text.replace(/```json|```/g, "").trim();
+      const parsed = JSON.parse(cleaned);
+      return res.json({ success: true, analysis: parsed });
+    } catch (err: any) {
+      return res.status(500).json({ error: err.message || "Performance analysis failed." });
+    }
+  });
 
-// Global Error Handler
-app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
-  console.error("[GLOBAL ERROR]", err);
-  res.status(500).json({ error: err.message || "Internal Server Error" });
-});
+  app.post("/api/ai/blueprint", async (req, res) => {
+    try {
+      const { subject, totalQuestions = 50, pattern = "NEET 2026", apiKey } = req.body;
+      const ai = getGeminiClient(apiKey);
+      const prompt = `You are an NTA Exam Director. Generate a balanced blueprint for ${subject || 'NEET Biology'} following the ${pattern} pattern.
+Total Questions: ${totalQuestions} (Section A: 35 mandatory, Section B: 15 with 10 to attempt).
+Return ONLY valid JSON:
+{
+  "patternName": "${pattern} Standard Blueprint",
+  "sectionA": {
+    "count": 35,
+    "type": "Mandatory",
+    "topics": [
+      { "chapter": "Cell Biology & Genetics", "questions": 12, "difficulty": "Medium" }
+    ]
+  },
+  "sectionB": {
+    "count": 15,
+    "type": "Attempt any 10",
+    "topics": [
+      { "chapter": "Biotechnology & Applications", "questions": 5, "difficulty": "Hard" }
+    ]
+  },
+  "cognitiveTaxonomy": {
+    "Recall/FactBased": "40%",
+    "ConceptualUnderstanding": "35%",
+    "ApplicationAndAnalytical": "25%"
+  },
+  "recommendations": "Ensure Assertion-Reason questions are framed with clear, unambiguous reasoning from NCERT lines."
+}`;
+      const response = await ai.models.generateContent({
+        model: "gemini-2.5-flash",
+        contents: [{ role: "user", parts: [{ text: prompt }] }],
+        config: { responseMimeType: "application/json" }
+      });
+      const text = response.text || "{}";
+      const cleaned = text.replace(/```json|```/g, "").trim();
+      const parsed = JSON.parse(cleaned);
+      return res.json({ success: true, blueprint: parsed });
+    } catch (err: any) {
+      return res.status(500).json({ error: err.message || "Blueprint generation failed." });
+    }
+  });
 
-// ================= VITE / STATIC / EXPORT =================
-async function attachVite() {
-  if (process.env.NODE_ENV!== "production") {
-    const vite = await createViteServer({ server: { middlewareMode: true }, appType: "spa" });
+  if (process.env.NODE_ENV !== "production") {
+    const vite = await createViteServer({
+      server: { middlewareMode: true },
+      appType: "spa"
+    });
     app.use(vite.middlewares);
   } else {
     const distPath = path.join(process.cwd(), "dist");
     app.use(express.static(distPath));
-    app.get("*", (req, res, next) => {
-      if (req.path.startsWith("/api/")) return next();
+    app.get("*", (req, res) => {
       res.sendFile(path.join(distPath, "index.html"));
     });
   }
-}
-attachVite();
 
-const PORT = process.env.PORT || 3000;
-if (process.env.NODE_ENV!== "production") {
-  app.listen(PORT, () => console.log(`[ASI] Server v3.0 running on ${PORT}`));
+  app.listen(PORT, "0.0.0.0", () => {
+    console.log(`Server running on port ${PORT}`);
+  });
 }
 
-// Vercel ke liye ye sabse important hai
-export default app;
+startServer();
