@@ -1,0 +1,20 @@
+{
+  "name": "Amerj Sir Institute - NEET CBT",
+  "short_name": "ASI CBT",
+  "description": "Best NEET & JEE Biology CBT Mock Test Platform by Amerj Sir Institute Niwari.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0f172a",
+  "theme_color": "#7c3aed",
+  "orientation": "portrait-primary",
+  "icons": [
+    {
+      "src": "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 512 512'><rect width='512' height='512' rx='128' fill='%237c3aed'/><path d='M256 120L370 380H315L290 320H222L197 380H142L256 120ZM256 220L236 275H276L256 220Z' fill='white'/><circle cx='390' cy='140' r='36' fill='%2310b981'/></svg>",
+      "sizes": "192x192 512x512",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ],
+  "categories": ["education", "productivity"],
+  "screenshots": []
+}

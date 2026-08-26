@@ -66,11 +66,14 @@ export interface UserProfile {
   email: string;
   role: UserRole;
   avatarUrl?: string;
+  photoUrl?: string;
   rollNumber?: string;
   targetExam?: 'NEET 2026' | 'NEET 2027' | 'JEE Main/Adv' | string;
-  targetScore?: number;
+  targetScore?: string | number;
+  targetCollege?: string;
   phone?: string;
   department?: string;
+  token?: string;
   isLoggedIn: boolean;
 }
 

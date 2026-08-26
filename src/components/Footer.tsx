@@ -152,6 +152,15 @@ export const Footer: React.FC<FooterProps> = ({
                   Sign Up Free
                 </button>
               </li>
+              <li className="pt-1">
+                <a 
+                  href="#admin" 
+                  className="text-violet-400 hover:text-violet-300 font-semibold flex items-center gap-1 transition-colors"
+                >
+                  <Shield className="w-3.5 h-3.5" />
+                  <span>Teacher &amp; Faculty Portal</span>
+                </a>
+              </li>
             </ul>
           </div>
 

@@ -23,8 +23,9 @@ import {
   Layers
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
-import { TestItem, TestResult } from '../types';
+import { TestItem, TestResult, Question } from '../types';
 import { saveStudentResult } from '../utils/supabaseClient';
+import { MOCK_TESTS } from '../data/mockTests';
 
 interface TestSimulatorModalProps {
   test: TestItem | null;
@@ -41,6 +42,35 @@ export const TestSimulatorModal: React.FC<TestSimulatorModalProps> = ({
 
   // Active question index (0-based)
   const [currentIdx, setCurrentIdx] = useState<number>(0);
+
+  // Normalize questions list safely
+  const questions: Question[] = useMemo(() => {
+    if (test.questions && Array.isArray(test.questions) && test.questions.length > 0) {
+      return test.questions.map((q, i) => ({
+        id: q.id ?? i + 1,
+        question: q.question || `Question ${i + 1}`,
+        options: Array.isArray(q.options) && q.options.length >= 2 
+          ? q.options 
+          : ['Option A', 'Option B', 'Option C', 'Option D'],
+        correctAnswer: typeof q.correctAnswer === 'number' ? q.correctAnswer : 0,
+        chapter: q.chapter || test.subject || 'Biology',
+        ncertReference: q.ncertReference || 'NCERT Reference',
+        explanation: q.explanation || 'Detailed NCERT solution.'
+      }));
+    }
+    // Fallback if test has no questions
+    return MOCK_TESTS[0]?.questions || [
+      {
+        id: 1,
+        question: `Sample question for ${test.title}: Which of the following is correct according to NCERT?`,
+        options: ['Option A', 'Option B', 'Option C', 'Option D'],
+        correctAnswer: 0,
+        chapter: test.subject || 'Biology',
+        ncertReference: 'NCERT Biology',
+        explanation: 'Detailed solution for this concept.'
+      }
+    ];
+  }, [test]);
   
   // Selected option index per questionId (e.g. {1: 0, 2: 3})
   const [answers, setAnswers] = useState<Record<number, number | null>>(() => {
@@ -76,7 +106,7 @@ export const TestSimulatorModal: React.FC<TestSimulatorModalProps> = ({
     } catch {
       // fallback
     }
-    return test.durationMinutes * 60;
+    return (test.durationMinutes || 45) * 60;
   });
   
   // State: 'testing' | 'submitted'
@@ -105,21 +135,21 @@ export const TestSimulatorModal: React.FC<TestSimulatorModalProps> = ({
 
   // Selected Section / Subject Tab
   const sections = useMemo(() => {
-    const chapters = Array.from(new Set(test.questions.map(q => q.chapter || test.subject || 'Section A')));
+    const chapters = Array.from(new Set(questions.map(q => q.chapter || test.subject || 'Section A')));
     if (chapters.length <= 1) {
       return [
-        { name: `${test.subject || 'Biology'} - Section A`, startIdx: 0, count: Math.min(35, test.questions.length) },
-        ...(test.questions.length > 35 ? [{ name: `${test.subject || 'Biology'} - Section B`, startIdx: 35, count: test.questions.length - 35 }] : [])
+        { name: `${test.subject || 'Biology'} - Section A`, startIdx: 0, count: Math.min(35, questions.length) },
+        ...(questions.length > 35 ? [{ name: `${test.subject || 'Biology'} - Section B`, startIdx: 35, count: questions.length - 35 }] : [])
       ];
     }
     let currentStart = 0;
     return chapters.map(ch => {
-      const qInCh = test.questions.filter(q => (q.chapter || test.subject) === ch);
+      const qInCh = questions.filter(q => (q.chapter || test.subject) === ch);
       const s = { name: ch, startIdx: currentStart, count: qInCh.length };
       currentStart += qInCh.length;
       return s;
     });
-  }, [test]);
+  }, [questions, test.subject]);
 
   const [activeSectionIdx, setActiveSectionIdx] = useState<number>(0);
 
@@ -229,7 +259,7 @@ export const TestSimulatorModal: React.FC<TestSimulatorModalProps> = ({
     let answeredMarked = 0;
     let notVisited = 0;
 
-    test.questions.forEach((q, idx) => {
+    questions.forEach((q, idx) => {
       const status = getQuestionStatus(idx, q.id);
       if (status === 'answered') answered++;
       else if (status === 'not_answered') notAnswered++;
@@ -239,7 +269,7 @@ export const TestSimulatorModal: React.FC<TestSimulatorModalProps> = ({
     });
 
     return { answered, notAnswered, marked, answeredMarked, notVisited };
-  }, [test.questions, getQuestionStatus]);
+  }, [questions, getQuestionStatus]);
 
   const handleSelectOption = (qId: number, optIdx: number) => {
     setAnswers((prev) => ({
@@ -257,7 +287,7 @@ export const TestSimulatorModal: React.FC<TestSimulatorModalProps> = ({
   };
 
   const handleSaveAndNext = () => {
-    if (currentIdx < test.questions.length - 1) {
+    if (currentIdx < questions.length - 1) {
       setCurrentIdx(prev => prev + 1);
     }
   };
@@ -267,7 +297,7 @@ export const TestSimulatorModal: React.FC<TestSimulatorModalProps> = ({
       ...prev,
       [qId]: true
     }));
-    if (currentIdx < test.questions.length - 1) {
+    if (currentIdx < questions.length - 1) {
       setCurrentIdx(prev => prev + 1);
     }
   };
@@ -283,8 +313,8 @@ export const TestSimulatorModal: React.FC<TestSimulatorModalProps> = ({
     if (testState !== 'testing' || showSubmitConfirm || showQuestionPaperModal || showInstructionsModal) return;
 
     const handleKeyDown = (e: KeyboardEvent) => {
-      const currentQ = test.questions[currentIdx];
-      if (!currentQ) return;
+      const currentQ = questions[currentIdx] || questions[0];
+      if (!currentQ || !currentQ.options) return;
 
       if (['1', '2', '3', '4'].includes(e.key)) {
         const opt = parseInt(e.key, 10) - 1;
@@ -301,7 +331,7 @@ export const TestSimulatorModal: React.FC<TestSimulatorModalProps> = ({
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [testState, currentIdx, test.questions, showSubmitConfirm, showQuestionPaperModal, showInstructionsModal]);
+  }, [testState, currentIdx, questions, showSubmitConfirm, showQuestionPaperModal, showInstructionsModal]);
 
   const executeFinalSubmission = () => {
     setShowSubmitConfirm(false);
@@ -309,7 +339,7 @@ export const TestSimulatorModal: React.FC<TestSimulatorModalProps> = ({
     let incorrectCount = 0;
     let attemptedCount = 0;
 
-    test.questions.forEach((q) => {
+    questions.forEach((q) => {
       const selected = answers[q.id];
       if (selected !== undefined && selected !== null) {
         attemptedCount++;
@@ -321,11 +351,11 @@ export const TestSimulatorModal: React.FC<TestSimulatorModalProps> = ({
       }
     });
 
-    const unattemptedCount = test.questions.length - attemptedCount;
+    const unattemptedCount = questions.length - attemptedCount;
     // NEET Marking: +4 for correct, -1 for wrong
     const calculatedScore = (correctCount * 4) - (incorrectCount * 1);
     const accuracy = attemptedCount > 0 ? Math.round((correctCount / attemptedCount) * 100) : 0;
-    const timeSpent = (test.durationMinutes * 60) - timeLeft;
+    const timeSpent = ((test.durationMinutes || 45) * 60) - timeLeft;
 
     // Get candidate session details if logged in
     let candidateName = 'Student Candidate';
@@ -343,13 +373,13 @@ export const TestSimulatorModal: React.FC<TestSimulatorModalProps> = ({
       testTitle: test.title,
       studentName: candidateName,
       studentEmail: candidateEmail,
-      totalQuestions: test.questions.length,
+      totalQuestions: questions.length,
       attempted: attemptedCount,
       correct: correctCount,
       incorrect: incorrectCount,
       unattempted: unattemptedCount,
       score: calculatedScore,
-      totalMarks: test.questions.length * 4,
+      totalMarks: questions.length * 4,
       accuracy,
       timeSpentSeconds: Math.max(1, timeSpent),
       answers,
@@ -378,7 +408,7 @@ export const TestSimulatorModal: React.FC<TestSimulatorModalProps> = ({
           body: JSON.stringify({
             botToken: tgConfig.botToken,
             chatId: tgConfig.chatId,
-            message: `📊 <b>New CBT Scorecard Submitted!</b>\n\n👤 <b>Candidate:</b> ${candidateName}\n📝 <b>Test:</b> ${test.title}\n🎯 <b>Score:</b> ${calculatedScore} / ${test.questions.length * 4}\n✅ <b>Accuracy:</b> ${accuracy}%\n⏱️ <b>Time Taken:</b> ${Math.round(timeSpent / 60)} mins`
+            message: `📊 <b>New CBT Scorecard Submitted!</b>\n\n👤 <b>Candidate:</b> ${candidateName}\n📝 <b>Test:</b> ${test.title}\n🎯 <b>Score:</b> ${calculatedScore} / ${questions.length * 4}\n✅ <b>Accuracy:</b> ${accuracy}%\n⏱️ <b>Time Taken:</b> ${Math.round(timeSpent / 60)} mins`
           })
         }).catch(console.warn);
       }
@@ -406,12 +436,20 @@ export const TestSimulatorModal: React.FC<TestSimulatorModalProps> = ({
     setMarkedForReview({});
     setVisitedIndices(new Set([0]));
     setCurrentIdx(0);
-    setTimeLeft(test.durationMinutes * 60);
+    setTimeLeft((test.durationMinutes || 45) * 60);
     setTestState('testing');
     setResult(null);
   };
 
-  const currentQuestion = test.questions[currentIdx] || test.questions[0];
+  const currentQuestion = questions[currentIdx] || questions[0] || {
+    id: 1,
+    question: 'No question available',
+    options: ['A', 'B', 'C', 'D'],
+    correctAnswer: 0,
+    chapter: test.subject || 'Biology',
+    ncertReference: 'NCERT Reference',
+    explanation: 'No explanation available.'
+  };
 
   return (
     <div className="fixed inset-0 z-50 overflow-hidden bg-slate-900/90 backdrop-blur-xs flex flex-col items-center justify-center p-0 select-none">
@@ -763,13 +801,13 @@ export const TestSimulatorModal: React.FC<TestSimulatorModalProps> = ({
 
                 {/* Section header in palette */}
                 <div className="flex items-center justify-between text-xs font-bold text-slate-700 px-1">
-                  <span>Questions ({test.questions.length})</span>
+                  <span>Questions ({questions.length})</span>
                   <span className="text-[10px] text-slate-500 font-normal">Click to navigate</span>
                 </div>
 
                 {/* Question Grid Buttons */}
                 <div className="grid grid-cols-5 gap-1.5 max-h-56 sm:max-h-72 overflow-y-auto p-1 bg-white rounded-lg border border-slate-200">
-                  {test.questions.map((q, idx) => {
+                  {questions.map((q, idx) => {
                     const status = getQuestionStatus(idx, q.id);
                     const isCurrent = idx === currentIdx;
 
@@ -910,7 +948,7 @@ export const TestSimulatorModal: React.FC<TestSimulatorModalProps> = ({
                     reviewFilter === 'all' ? 'bg-slate-900 text-white' : 'text-slate-600 hover:bg-slate-50'
                   }`}
                 >
-                  All ({test.questions.length})
+                  All ({questions.length})
                 </button>
                 <button
                   onClick={() => setReviewFilter('correct')}
@@ -933,7 +971,7 @@ export const TestSimulatorModal: React.FC<TestSimulatorModalProps> = ({
 
             {/* Solution Cards List */}
             <div className="space-y-4">
-              {test.questions
+              {questions
                 .filter((q) => {
                   const userSelected = answers[q.id];
                   const isCorrect = userSelected === q.correctAnswer;
@@ -1112,7 +1150,7 @@ export const TestSimulatorModal: React.FC<TestSimulatorModalProps> = ({
                   <tbody className="divide-y divide-slate-100 font-medium">
                     <tr>
                       <td className="p-2.5 text-slate-700">Total Questions</td>
-                      <td className="p-2.5 text-right font-bold text-slate-900">{test.questions.length}</td>
+                      <td className="p-2.5 text-right font-bold text-slate-900">{questions.length}</td>
                     </tr>
                     <tr className="bg-emerald-50/50">
                       <td className="p-2.5 text-emerald-800 font-semibold">Answered</td>
@@ -1180,13 +1218,13 @@ export const TestSimulatorModal: React.FC<TestSimulatorModalProps> = ({
               </button>
             </div>
             <div className="p-5 overflow-y-auto space-y-4 text-xs">
-              {test.questions.map((q, idx) => (
+              {questions.map((q, idx) => (
                 <div key={q.id} className="p-3.5 bg-slate-50 rounded-lg border border-slate-200 space-y-2">
                   <div className="font-bold text-slate-800">
                     Q{idx + 1}. {q.question}
                   </div>
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5 text-slate-700">
-                    {q.options.map((opt, oIdx) => (
+                    {(q.options || []).map((opt, oIdx) => (
                       <div key={oIdx} className="p-1.5 bg-white rounded border border-slate-200">
                         ({String.fromCharCode(65 + oIdx)}) {opt}
                       </div>

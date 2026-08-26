@@ -1,4 +1,4 @@
-herename: Build ASI APK
+name: Build ASI APK
 on:
   push:
     branches: [ main ]

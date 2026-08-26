@@ -2,26 +2,49 @@ import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { TestItem, TestResult, UserProfile } from '../types';
 import { MOCK_TESTS } from '../data/mockTests';
 
-// Retrieve environment variables
-const supabaseUrl = (import.meta as any).env?.VITE_SUPABASE_URL || '';
-const supabaseAnonKey = (import.meta as any).env?.VITE_SUPABASE_ANON_KEY || '';
+// Retrieve environment variables safely across browser & SSR environments
+const getEnvVar = (key: string): string => {
+  try {
+    const metaEnv = (import.meta as any)?.env;
+    if (metaEnv && metaEnv[key]) {
+      return String(metaEnv[key]).trim();
+    }
+  } catch {
+    // ignore
+  }
+  try {
+    if (typeof process !== 'undefined' && process.env && (process.env as any)[key]) {
+      return String((process.env as any)[key]).trim();
+    }
+  } catch {
+    // ignore
+  }
+  return '';
+};
+
+const supabaseUrl = getEnvVar('VITE_SUPABASE_URL');
+const supabaseAnonKey = getEnvVar('VITE_SUPABASE_ANON_KEY');
 
 export const isSupabaseConfigured = Boolean(
-  supabaseUrl && 
-  supabaseAnonKey && 
+  supabaseUrl &&
+  supabaseAnonKey &&
   supabaseUrl.startsWith('https://') &&
   !supabaseUrl.includes('placeholder')
 );
 
 // Initialize Supabase Client if credentials are provided
 export const supabase: SupabaseClient | null = isSupabaseConfigured
-  ? createClient(supabaseUrl, supabaseAnonKey)
+  ? createClient(supabaseUrl, supabaseAnonKey, {
+      auth: {
+        persistSession: true,
+        autoRefreshToken: true
+      }
+    })
   : null;
 
-// Local storage backup keys
+// Local storage backup keys for resilient fallback
 const LOCAL_TESTS_KEY = 'asi_custom_tests';
 const LOCAL_RESULTS_KEY = 'asi_student_results';
-const LOCAL_PROFILE_KEY = 'asi_user_session';
 
 /**
  * Fetch all tests from Supabase with graceful fallback to localStorage and MOCK_TESTS
@@ -40,13 +63,17 @@ export async function fetchAllTests(): Promise<TestItem[]> {
           title: row.title || 'NEET Biology Mock Test',
           category: row.category || 'NEET Full Syllabus',
           subject: row.subject || 'Biology',
-          totalQuestions: Array.isArray(row.questions) ? row.questions.length : (row.total_questions || 30),
+          totalQuestions: Array.isArray(row.questions)
+            ? row.questions.length
+            : (row.total_questions || row.totalQuestions || 30),
           durationMinutes: row.duration_minutes || row.durationMinutes || 45,
-          totalMarks: row.total_marks || (Array.isArray(row.questions) ? row.questions.length * 4 : 120),
+          totalMarks: row.total_marks || row.totalMarks || (Array.isArray(row.questions) ? row.questions.length * 4 : 120),
           difficulty: row.difficulty || 'Medium',
-          syllabus: Array.isArray(row.syllabus) ? row.syllabus : ['NEET Biology Syllabus'],
+          syllabus: Array.isArray(row.syllabus)
+            ? row.syllabus
+            : (row.syllabus ? [row.syllabus] : ['NEET Biology Syllabus']),
           description: row.description || 'Comprehensive NEET mock test.',
-          attemptsCount: row.attempts_count || 120,
+          attemptsCount: row.attempts_count || row.attemptsCount || 120,
           rating: row.rating || 4.9,
           isPopular: row.is_popular ?? false,
           isNew: row.is_new ?? false,
@@ -55,11 +82,11 @@ export async function fetchAllTests(): Promise<TestItem[]> {
           isCustom: true
         }));
 
-        // Cache locally for offline speed
+        // Cache locally for instant offline loading
         try {
           localStorage.setItem(LOCAL_TESTS_KEY, JSON.stringify(formatted));
         } catch {
-          // ignore quota
+          // ignore storage quota
         }
 
         return formatted;
@@ -79,7 +106,7 @@ export async function fetchAllTests(): Promise<TestItem[]> {
       return combined;
     }
   } catch (e) {
-    console.warn('Error loading from local storage:', e);
+    console.warn('Error loading tests from local storage:', e);
   }
 
   return MOCK_TESTS;
@@ -89,7 +116,7 @@ export async function fetchAllTests(): Promise<TestItem[]> {
  * Save or insert a test to Supabase with local storage mirror
  */
 export async function saveTestToDb(test: TestItem): Promise<{ success: boolean; error?: string }> {
-  // Always update local storage first for instant zero-lag UI
+  // Always update local storage first for immediate zero-latency UI update
   try {
     const existing = localStorage.getItem(LOCAL_TESTS_KEY);
     let list: TestItem[] = existing ? JSON.parse(existing) : [];
@@ -117,7 +144,7 @@ export async function saveTestToDb(test: TestItem): Promise<{ success: boolean; 
         syllabus: test.syllabus,
         description: test.description,
         questions: test.questions,
-        created_at: new Date().toISOString()
+        created_at: test.created_at || new Date().toISOString()
       };
 
       const { error } = await supabase
@@ -125,12 +152,12 @@ export async function saveTestToDb(test: TestItem): Promise<{ success: boolean; 
         .upsert([payload], { onConflict: 'id' });
 
       if (error) {
-        console.warn('Supabase test insert error:', error.message);
+        console.warn('Supabase test insert warning:', error.message);
         return { success: false, error: error.message };
       }
     } catch (err: any) {
       console.warn('Supabase save exception:', err);
-      return { success: false, error: err.message };
+      return { success: false, error: err.message || 'Unknown save error' };
     }
   }
 
@@ -166,7 +193,7 @@ export async function deleteTestFromDb(testId: string): Promise<{ success: boole
       }
     } catch (err: any) {
       console.warn('Supabase delete exception:', err);
-      return { success: false, error: err.message };
+      return { success: false, error: err.message || 'Unknown delete error' };
     }
   }
 
@@ -277,16 +304,28 @@ export function subscribeToRealtimeTests(onUpdate: (tests: TestItem[]) => void):
     const channel = supabase
       .channel('public:tests')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'tests' }, async () => {
-        const freshTests = await fetchAllTests();
-        onUpdate(freshTests);
+        try {
+          const freshTests = await fetchAllTests();
+          if (freshTests && freshTests.length > 0) {
+            onUpdate(freshTests);
+          }
+        } catch (e) {
+          console.warn('Error fetching fresh tests in realtime listener:', e);
+        }
       })
       .subscribe();
 
     return () => {
-      supabase?.removeChannel(channel);
+      try {
+        if (supabase && channel) {
+          supabase.removeChannel(channel);
+        }
+      } catch (err) {
+        console.warn('Error removing channel:', err);
+      }
     };
   } catch (err) {
-    console.warn('Realtime subscription error:', err);
+    console.warn('Realtime subscription exception:', err);
     return () => {};
   }
 }

@@ -26,16 +26,16 @@ async function startServer() {
     res.json({ status: "ok", timestamp: new Date().toISOString() });
   });
 
-  // 1. Teacher Secure Login Endpoint
-  app.post("/api/teacher-auth", (req, res) => {
+  // 1. Teacher & Admin Secure Login Endpoint
+  app.post(["/api/teacher-auth", "/api/admin-auth"], (req, res) => {
     try {
       const { email, password } = req.body;
-      const expectedPassword = process.env.TEACHER_PASSWORD || process.env.TEACHER_ACCESS_KEY || "ASI@2025";
+      const expectedPassword = process.env.ADMIN_PASSWORD || process.env.TEACHER_PASSWORD || process.env.TEACHER_ACCESS_KEY || "ASI@2025";
 
       if (!password || password.trim() !== expectedPassword.trim()) {
         return res.status(401).json({
           success: false,
-          error: "Galat password! (Invalid Teacher Access Key). Access denied."
+          error: "Galat password! (Invalid Teacher / Admin Access Key). Access denied."
         });
       }
 
@@ -45,7 +45,7 @@ async function startServer() {
         user: {
           name: "Amerj Sir",
           email: facultyEmail,
-          role: "teacher",
+          role: "admin",
           department: "Head of NEET & JEE Biology",
           isLoggedIn: true,
           token: "ASI_FACULTY_" + Buffer.from(facultyEmail + Date.now()).toString("base64")
@@ -53,6 +53,164 @@ async function startServer() {
       });
     } catch (err: any) {
       return res.status(500).json({ success: false, error: err.message || "Auth error" });
+    }
+  });
+
+  // 2. Telegram Bot Notification & Broadcast Engine
+  app.post("/api/telegram/notify", async (req, res) => {
+    try {
+      const { botToken, chatId, message, parseMode = "HTML" } = req.body;
+      const token = botToken?.trim() || process.env.TELEGRAM_BOT_TOKEN;
+      const targetChat = chatId?.trim() || process.env.TELEGRAM_CHAT_ID;
+
+      if (!token || !targetChat) {
+        return res.status(400).json({
+          success: false,
+          error: "Telegram Bot Token and Chat ID are required."
+        });
+      }
+
+      const telegramUrl = `https://api.telegram.org/bot${token}/sendMessage`;
+      const response = await fetch(telegramUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          chat_id: targetChat,
+          text: message,
+          parse_mode: parseMode,
+          disable_web_page_preview: false
+        })
+      });
+
+      const data = await response.json();
+      if (!data.ok) {
+        return res.status(400).json({
+          success: false,
+          error: data.description || "Telegram API failed to dispatch message."
+        });
+      }
+
+      return res.json({ success: true, telegramResult: data.result });
+    } catch (err: any) {
+      console.error("Telegram dispatch error:", err);
+      return res.status(500).json({ success: false, error: err.message || "Failed to send Telegram notification" });
+    }
+  });
+
+  // Telegram Connection Verification Endpoint
+  app.post("/api/telegram/test-connection", async (req, res) => {
+    try {
+      const { botToken, chatId } = req.body;
+      const token = botToken?.trim() || process.env.TELEGRAM_BOT_TOKEN;
+      const targetChat = chatId?.trim() || process.env.TELEGRAM_CHAT_ID;
+
+      if (!token) {
+        return res.status(400).json({ success: false, error: "Telegram Bot Token is required." });
+      }
+
+      const getMeUrl = `https://api.telegram.org/bot${token}/getMe`;
+      const meRes = await fetch(getMeUrl);
+      const meData = await meRes.json();
+
+      if (!meData.ok) {
+        return res.status(400).json({ success: false, error: "Invalid Bot Token: " + (meData.description || "Unknown") });
+      }
+
+      let chatValid = false;
+      if (targetChat) {
+        const testMsgUrl = `https://api.telegram.org/bot${token}/sendMessage`;
+        const testMsg = await fetch(testMsgUrl, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            chat_id: targetChat,
+            text: "✅ <b>Amerj Sir Institute</b>: Telegram Bot successfully connected to NEET CBT Platform!",
+            parse_mode: "HTML"
+          })
+        });
+        const testData = await testMsg.json();
+        chatValid = testData.ok;
+      }
+
+      return res.json({
+        success: true,
+        botInfo: meData.result,
+        chatVerified: chatValid
+      });
+    } catch (err: any) {
+      return res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  // 3. Smart AI-Assisted Text Extractor for Raw PDFs
+  app.post("/api/extract-pdf-text", async (req, res) => {
+    try {
+      const { rawText, subject = "Biology", apiKey } = req.body;
+
+      if (!rawText || typeof rawText !== "string" || rawText.trim().length < 20) {
+        return res.status(400).json({ error: "Extracted text content is empty or too short." });
+      }
+
+      const ai = getGeminiClient(apiKey);
+      const prompt = `You are a world-class NEET/JEE Examination Paper Parser and OCR Structuring Specialist.
+You have been provided with raw text extracted from a coaching PDF or exam paper.
+
+Your Mission:
+1. Parse every single MCQ question precisely.
+2. Clean option texts: Strip (A), (B), (C), (D) tags so the option string is just the pure answer text.
+3. Determine the correct answer (0 for A/1, 1 for B/2, 2 for C/3, 3 for D/4). If no answer key is found, determine the scientifically accurate answer according to NCERT.
+4. Provide a rich NCERT-grounded step-by-step Hinglish explanation for each question.
+5. Identify the chapter / topic.
+
+Return STRICT JSON ARRAY only:
+[
+  {
+    "question": "Clear, well-punctuated question statement",
+    "options": ["Option A text", "Option B text", "Option C text", "Option D text"],
+    "answer": 0,
+    "explanation_hinglish": "NCERT step-by-step solution in Hinglish",
+    "topic": "${subject}",
+    "difficulty": "Medium"
+  }
+]
+
+RAW EXTRACTED TEXT CONTENT:
+${rawText.slice(0, 32000)}`;
+
+      const response = await ai.models.generateContent({
+        model: "gemini-2.5-flash",
+        contents: [{ role: "user", parts: [{ text: prompt }] }],
+        config: { responseMimeType: "application/json" }
+      });
+
+      const responseText = response.text || "[]";
+      const cleaned = responseText.replace(/```json|```/g, "").trim();
+      let parsed = JSON.parse(cleaned);
+
+      let questionsArray: any[] = [];
+      if (Array.isArray(parsed)) {
+        questionsArray = parsed;
+      } else if (parsed && Array.isArray(parsed.questions)) {
+        questionsArray = parsed.questions;
+      }
+
+      const formatted = questionsArray.map((q: any, idx: number) => ({
+        id: idx + 1,
+        question: q.question || `Question ${idx + 1}`,
+        options: Array.isArray(q.options) && q.options.length >= 2
+          ? q.options.slice(0, 4).map((opt: any) => String(opt).trim())
+          : ["Option A", "Option B", "Option C", "Option D"],
+        correctAnswer: typeof q.answer === "number" ? q.answer : (typeof q.ans === "number" ? q.ans : 0),
+        explanation: q.explanation_hinglish || q.explanation || "NCERT conceptual solution.",
+        chapter: q.topic || subject,
+        topic: q.topic || subject,
+        difficulty: q.difficulty || "Medium"
+      }));
+
+      return res.json({ success: true, questions: formatted });
+    } catch (err: any) {
+      console.error("Smart text parser error:", err);
+      return res.status(500).json({ error: err.message || "Failed to parse text with AI." });
     }
   });
 
@@ -459,6 +617,4 @@ Return ONLY valid JSON:
   });
 }
 
-startServer();
-Yeh uska code hai isme change kar 
-Mera yeh code ready Karo 
+startServer(); 

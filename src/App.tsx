@@ -1,14 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { 
-  Dna, 
-  Sparkles, 
-  BookOpen, 
-  HelpCircle, 
-  ChevronRight, 
-  Flame, 
-  ShieldCheck,
-  Award
-} from 'lucide-react';
+import { BookOpen, Flame, ShieldAlert, Smartphone } from 'lucide-react';
 import { Navbar } from './components/Navbar';
 import { Hero } from './components/Hero';
 import { TestCard } from './components/TestCard';
@@ -22,9 +13,11 @@ import { AuthModal } from './components/AuthModal';
 import { StudentDashboard } from './components/StudentDashboard';
 import { AdminDashboard } from './components/AdminDashboard';
 import { TeacherLoginPage } from './components/TeacherLoginPage';
-import { ToastProvider, useToast } from './components/Toast';
+import { ToastProvider } from './components/Toast';
+import { HomeNotificationBanner } from './components/NotificationCenter';
+import { PwaInstallButton } from './components/PwaInstallButton';
 
-import { MOCK_TESTS, INSTITUTE_INFO } from './data/mockTests';
+import { MOCK_TESTS } from './data/mockTests';
 import { TestItem, TestCategory, Difficulty, UserProfile } from './types';
 import { subscribeToRealtimeTests, fetchAllTests } from './utils/supabaseClient';
 
@@ -32,39 +25,80 @@ function MainAppContent() {
   // Navigation active section tracking
   const [activeSection, setActiveSection] = useState<string>('hero');
 
-  // User session state restored from localStorage
-  const [user, setUser] = useState<UserProfile | null>(() => {
+  // 1. Separate Student Session (Saved in asi_student_session)
+  const [studentUser, setStudentUser] = useState<UserProfile | null>(() => {
     try {
-      const savedUser = localStorage.getItem('asi_user_session');
-      if (savedUser) {
-        return JSON.parse(savedUser);
+      const savedStudent = localStorage.getItem('asi_student_session');
+      if (savedStudent) {
+        const parsed = JSON.parse(savedStudent);
+        if (parsed.role === 'student' || !parsed.role) {
+          return { ...parsed, role: 'student' };
+        }
+      }
+      // Backward compatibility check
+      const legacyUser = localStorage.getItem('asi_user_session');
+      if (legacyUser) {
+        const parsed = JSON.parse(legacyUser);
+        if (parsed.role === 'student') return parsed;
       }
     } catch (e) {
-      console.warn('Session load error:', e);
+      console.warn('Student session load error:', e);
     }
     return null;
   });
 
-  // Current Route: 'home' | 'teacher-login' | 'dashboard'
-  const [currentRoute, setCurrentRoute] = useState<'home' | 'teacher-login' | 'dashboard'>(() => {
+  // 2. Separate Admin / Teacher Session (Saved in asi_admin_session)
+  const [adminUser, setAdminUser] = useState<UserProfile | null>(() => {
+    try {
+      const savedAdmin = localStorage.getItem('asi_admin_session');
+      const savedToken = localStorage.getItem('asi_admin_token') || localStorage.getItem('asi_teacher_token');
+      if (savedAdmin && savedToken) {
+        const parsed = JSON.parse(savedAdmin);
+        if (parsed.role === 'admin' || parsed.role === 'teacher') {
+          return { ...parsed, role: 'admin' };
+        }
+      }
+      // Check legacy teacher token
+      const legacyRole = localStorage.getItem('asi_auth_role');
+      if (legacyRole === 'teacher' && savedToken) {
+        return {
+          name: 'Amerj Sir',
+          email: 'amerj.sir@asi-institute.edu',
+          role: 'admin',
+          department: 'Head of NEET & JEE Biology',
+          isLoggedIn: true,
+          token: savedToken
+        };
+      }
+    } catch (e) {
+      console.warn('Admin session load error:', e);
+    }
+    return null;
+  });
+
+  // Current Route: 'home' | 'student-dashboard' | 'admin' | 'teacher-login'
+  const [currentRoute, setCurrentRoute] = useState<'home' | 'student-dashboard' | 'admin'>(() => {
     if (typeof window !== 'undefined') {
       const hash = window.location.hash;
       const path = window.location.pathname;
-      if (hash.includes('teacher-login') || path.includes('teacher-login')) {
-        return 'teacher-login';
+      if (hash.includes('admin') || hash.includes('teacher') || path.includes('admin') || path.includes('teacher')) {
+        return 'admin';
+      }
+      if (hash.includes('student') || hash.includes('dashboard') || path.includes('student') || path.includes('dashboard')) {
+        return 'student-dashboard';
       }
     }
     return 'home';
   });
 
-  // Listen to hash changes for smooth navigation
+  // Listen to browser hash changes for seamless client routing
   useEffect(() => {
     const handleHashChange = () => {
       const hash = window.location.hash;
-      if (hash.includes('teacher-login')) {
-        setCurrentRoute('teacher-login');
-      } else if (hash.includes('dashboard')) {
-        setCurrentRoute('dashboard');
+      if (hash.includes('admin') || hash.includes('teacher')) {
+        setCurrentRoute('admin');
+      } else if (hash.includes('student') || hash.includes('dashboard')) {
+        setCurrentRoute('student-dashboard');
       } else {
         setCurrentRoute('home');
       }
@@ -74,19 +108,34 @@ function MainAppContent() {
     return () => window.removeEventListener('hashchange', handleHashChange);
   }, []);
 
-  // Sync user state with localStorage
-  const handleSetUser = (newUser: UserProfile | null) => {
-    setUser(newUser);
+  // 1. Student Session Manager
+  const handleSetStudentUser = (newUser: UserProfile | null) => {
+    setStudentUser(newUser);
     if (newUser) {
-      localStorage.setItem('asi_user_session', JSON.stringify(newUser));
+      localStorage.setItem('asi_student_session', JSON.stringify({ ...newUser, role: 'student' }));
     } else {
+      localStorage.removeItem('asi_student_session');
       localStorage.removeItem('asi_user_session');
+    }
+  };
+
+  // 2. Admin Session Manager
+  const handleSetAdminUser = (newAdmin: UserProfile | null) => {
+    setAdminUser(newAdmin);
+    if (newAdmin) {
+      localStorage.setItem('asi_admin_session', JSON.stringify({ ...newAdmin, role: 'admin' }));
+      if (newAdmin.token) {
+        localStorage.setItem('asi_admin_token', newAdmin.token);
+      }
+    } else {
+      localStorage.removeItem('asi_admin_session');
+      localStorage.removeItem('asi_admin_token');
       localStorage.removeItem('asi_teacher_token');
       localStorage.removeItem('asi_auth_role');
     }
   };
 
-  // Test pool state (Default mock tests + custom published tests)
+  // Test pool state (Default mock tests + custom published tests from Supabase)
   const [allTests, setAllTests] = useState<TestItem[]>(() => {
     try {
       const saved = localStorage.getItem('asi_custom_tests');
@@ -103,19 +152,33 @@ function MainAppContent() {
 
   // Listen to Supabase Cloud DB changes in realtime
   useEffect(() => {
-    fetchAllTests().then((dbTests) => {
-      if (dbTests && dbTests.length > 0) {
-        setAllTests(dbTests);
+    let isMounted = true;
+
+    const loadTests = async () => {
+      try {
+        const dbTests = await fetchAllTests();
+        if (isMounted && dbTests && dbTests.length > 0) {
+          setAllTests(dbTests);
+        }
+      } catch (err) {
+        console.warn('Initial tests fetch error:', err);
       }
-    }).catch(console.warn);
+    };
+
+    loadTests();
 
     const unsubscribe = subscribeToRealtimeTests((freshTests) => {
-      if (freshTests && freshTests.length > 0) {
+      if (isMounted && freshTests && freshTests.length > 0) {
         setAllTests(freshTests);
       }
     });
 
-    return () => unsubscribe();
+    return () => {
+      isMounted = false;
+      if (typeof unsubscribe === 'function') {
+        unsubscribe();
+      }
+    };
   }, []);
 
   // Auth modal state for students
@@ -159,29 +222,35 @@ function MainAppContent() {
     }
   };
 
-  // Auth Handlers
+  // Student Auth Handlers
   const handleOpenAuth = (mode: 'login' | 'signup') => {
     setAuthMode(mode);
     setAuthModalOpen(true);
   };
 
-  const handleLogout = () => {
-    handleSetUser(null);
+  const handleStudentLogout = () => {
+    handleSetStudentUser(null);
+    window.location.hash = '#';
+    setCurrentRoute('home');
+  };
+
+  const handleAdminLogout = () => {
+    handleSetAdminUser(null);
     window.location.hash = '#';
     setCurrentRoute('home');
   };
 
   const handleLoginSuccess = (userProfile: UserProfile) => {
-    handleSetUser(userProfile);
-    window.location.hash = '#dashboard';
-    setCurrentRoute('dashboard');
+    handleSetStudentUser(userProfile);
+    window.location.hash = '#student-dashboard';
+    setCurrentRoute('student-dashboard');
   };
 
-  // Teacher Login Success Handler
-  const handleTeacherLoginSuccess = (teacherProfile: UserProfile) => {
-    handleSetUser(teacherProfile);
-    window.location.hash = '#dashboard';
-    setCurrentRoute('dashboard');
+  // Teacher / Admin Login Success Handler
+  const handleAdminLoginSuccess = (adminProfile: UserProfile) => {
+    handleSetAdminUser(adminProfile);
+    window.location.hash = '#admin';
+    setCurrentRoute('admin');
   };
 
   // Filter tests logic
@@ -204,33 +273,16 @@ function MainAppContent() {
     return true;
   });
 
-  // 1. If viewing dedicated /teacher-login route
-  if (currentRoute === 'teacher-login') {
-    // If already logged in as teacher, redirect directly to dashboard
-    if (user && user.isLoggedIn && user.role === 'teacher') {
-      setCurrentRoute('dashboard');
-    } else {
+  // ================= ROUTE 1: ADMIN PANEL =================
+  if (currentRoute === 'admin') {
+    // If admin is verified and logged in -> Render Admin Dashboard
+    if (adminUser && adminUser.isLoggedIn) {
       return (
-        <TeacherLoginPage
-          onLoginSuccess={handleTeacherLoginSuccess}
-          onGoHome={() => {
-            window.location.hash = '#';
-            setCurrentRoute('home');
-          }}
-        />
-      );
-    }
-  }
-
-  // 2. If logged in and viewing the dashboard
-  if (user && user.isLoggedIn && currentRoute === 'dashboard') {
-    return (
-      <>
-        {user.role === 'teacher' || user.role === 'admin' ? (
+        <>
           <AdminDashboard
-            user={user}
+            user={adminUser}
             tests={allTests}
-            onLogout={handleLogout}
+            onLogout={handleAdminLogout}
             onGoHome={() => {
               window.location.hash = '#';
               setCurrentRoute('home');
@@ -238,75 +290,157 @@ function MainAppContent() {
             onPreviewTest={(test) => setActiveTestForTaking(test)}
             onUpdateTests={(updated) => setAllTests(updated)}
           />
-        ) : (
+          {activeTestForTaking && (
+            <TestSimulatorModal
+              test={activeTestForTaking}
+              onClose={() => setActiveTestForTaking(null)}
+            />
+          )}
+        </>
+      );
+    }
+
+    // Otherwise render secure Teacher/Admin Login Page
+    return (
+      <TeacherLoginPage
+        onLoginSuccess={handleAdminLoginSuccess}
+        onGoHome={() => {
+          window.location.hash = '#';
+          setCurrentRoute('home');
+        }}
+      />
+    );
+  }
+
+  // ================= ROUTE 2: STUDENT DASHBOARD =================
+  if (currentRoute === 'student-dashboard') {
+    if (studentUser && studentUser.isLoggedIn) {
+      return (
+        <>
           <StudentDashboard
-            user={user}
+            user={studentUser}
             tests={allTests}
             onStartTest={(test) => setActiveTestForTaking(test)}
             onViewDetails={(test) => setActiveTestForDetails(test)}
-            onLogout={handleLogout}
+            onLogout={handleStudentLogout}
             onGoHome={() => {
               window.location.hash = '#';
               setCurrentRoute('home');
             }}
             onUpdateProfile={(updated) => {
-              if (user) {
-                handleSetUser({ ...user, ...updated });
+              if (studentUser) {
+                handleSetStudentUser({ ...studentUser, ...updated });
               }
             }}
           />
-        )}
+          {activeTestForTaking && (
+            <TestSimulatorModal
+              test={activeTestForTaking}
+              onClose={() => setActiveTestForTaking(null)}
+            />
+          )}
+          {activeTestForDetails && (
+            <TestDetailsModal
+              test={activeTestForDetails}
+              onClose={() => setActiveTestForDetails(null)}
+              onStartTest={(t) => {
+                setActiveTestForDetails(null);
+                setActiveTestForTaking(t);
+              }}
+            />
+          )}
+        </>
+      );
+    }
 
-        {/* Full CBT Test Taking Simulator Modal */}
-        {activeTestForTaking && (
-          <TestSimulatorModal
-            test={activeTestForTaking}
-            onClose={() => setActiveTestForTaking(null)}
+    // If student not logged in, prompt Auth modal and show home
+    return (
+      <div className="min-h-screen bg-slate-900 text-white flex flex-col items-center justify-center p-4">
+        <div className="bg-slate-800 p-8 rounded-3xl max-w-md w-full text-center space-y-4 border border-violet-500/30 shadow-2xl">
+          <div className="w-14 h-14 rounded-2xl bg-violet-600 flex items-center justify-center mx-auto text-white shadow-lg">
+            <BookOpen className="w-7 h-7" />
+          </div>
+          <h2 className="text-xl font-bold text-white">Student Login Required</h2>
+          <p className="text-sm text-slate-300">
+            Please log in with your Student account to access your practice history, test scores, and analytics.
+          </p>
+          <div className="flex flex-col gap-2 pt-2">
+            <button
+              onClick={() => {
+                setAuthMode('login');
+                setAuthModalOpen(true);
+              }}
+              className="w-full py-3 bg-violet-600 hover:bg-violet-700 text-white text-sm font-bold rounded-xl shadow-md cursor-pointer"
+            >
+              Log In Student Account
+            </button>
+            <button
+              onClick={() => {
+                window.location.hash = '#';
+                setCurrentRoute('home');
+              }}
+              className="w-full py-2.5 text-xs font-semibold text-slate-400 hover:text-white"
+            >
+              &larr; Back to Home Page
+            </button>
+          </div>
+        </div>
+
+        {authModalOpen && (
+          <AuthModal
+            isOpen={authModalOpen}
+            initialMode={authMode}
+            onClose={() => setAuthModalOpen(false)}
+            onLoginSuccess={handleLoginSuccess}
           />
         )}
-
-        {/* Test Syllabus & Details Modal */}
-        {activeTestForDetails && (
-          <TestDetailsModal
-            test={activeTestForDetails}
-            onClose={() => setActiveTestForDetails(null)}
-            onStartTest={(t) => {
-              setActiveTestForDetails(null);
-              setActiveTestForTaking(t);
-            }}
-          />
-        )}
-      </>
+      </div>
     );
   }
 
-  // 3. Public Home / Landing View
+  // ================= ROUTE 3: PUBLIC HOME VIEW =================
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900 font-sans selection:bg-violet-200 selection:text-violet-900 flex flex-col">
       
-      {/* 1. Sticky Modern Navbar */}
+      {/* 1. Real-time Notification Banner on Top of Home */}
+      <HomeNotificationBanner
+        onStartTestNow={() => setActiveTestForTaking(MOCK_TESTS[0])}
+        onExploreTests={() => handleNavigate('tests-section')}
+      />
+
+      {/* 2. Sticky Modern Navbar with PWA & Notification Center */}
       <Navbar
-        user={user}
+        user={studentUser}
+        adminUser={adminUser}
         onOpenAuth={handleOpenAuth}
-        onLogout={handleLogout}
+        onLogout={handleStudentLogout}
+        onAdminLogout={handleAdminLogout}
         onNavigate={handleNavigate}
-        onOpenDashboard={() => {
-          window.location.hash = '#dashboard';
-          setCurrentRoute('dashboard');
+        onOpenStudentDashboard={() => {
+          window.location.hash = '#student-dashboard';
+          setCurrentRoute('student-dashboard');
+        }}
+        onOpenAdminDashboard={() => {
+          window.location.hash = '#admin';
+          setCurrentRoute('admin');
+        }}
+        onOpenTeacherLogin={() => {
+          window.location.hash = '#admin';
+          setCurrentRoute('admin');
         }}
         activeSection={activeSection}
       />
 
-      {/* 2. Hero Section */}
+      {/* 3. Main Content Sections */}
       <main className="flex-1">
         <Hero
           onViewAllTests={() => handleNavigate('tests-section')}
           onOpenAuth={handleOpenAuth}
-          isLoggedIn={!!user?.isLoggedIn}
+          isLoggedIn={!!studentUser?.isLoggedIn}
           onStartQuickMock={() => setActiveTestForTaking(MOCK_TESTS[0])}
         />
 
-        {/* 3. Available Online Tests Section */}
+        {/* Available Online Tests Section */}
         <section 
           id="tests-section"
           className="py-16 sm:py-24 max-w-7xl mx-auto px-4 sm:px-6 lg:px-8"
@@ -316,13 +450,13 @@ function MainAppContent() {
             <div>
               <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold bg-violet-50 text-violet-700 border border-violet-200 mb-2">
                 <BookOpen className="w-3.5 h-3.5" />
-                <span>NTA Standard Mock Series</span>
+                <span>NTA Standard CBT Series</span>
               </div>
               <h2 className="text-3xl sm:text-4xl font-extrabold text-slate-900 tracking-tight">
                 Available Online Tests
               </h2>
               <p className="text-slate-600 mt-2 text-sm sm:text-base max-w-2xl">
-                Select from chapter-wise challenges, unit revisions, and full syllabus grand mocks with instant solutions.
+                100% NCERT Biology tests for NEET &amp; JEE aspirants in Niwari with Section A &amp; Section B NTA timer simulation.
               </p>
             </div>
 
@@ -389,7 +523,7 @@ function MainAppContent() {
               <div>
                 <h4 className="text-sm font-bold text-slate-900">Pro Tip from Amerj Sir for NEET 2026:</h4>
                 <p className="text-xs text-slate-600">
-                  Attempt at least 2 full-syllabus Biology tests every week under strict 60-minute time constraints.
+                  Attempt at least 2 full-syllabus Biology tests every week under strict 60-minute time constraints to master speed &amp; accuracy.
                 </p>
               </div>
             </div>
@@ -402,18 +536,21 @@ function MainAppContent() {
           </div>
         </section>
 
-        {/* 4. Features Section */}
+        {/* Features Section */}
         <Features />
 
-        {/* 5. About Amerj Sir Institute Section */}
+        {/* About Amerj Sir Institute Section */}
         <AboutSection />
       </main>
 
-      {/* 6. Clean Footer */}
+      {/* Footer */}
       <Footer
         onNavigate={handleNavigate}
         onOpenAuth={handleOpenAuth}
       />
+
+      {/* Floating Bottom PWA Install Banner */}
+      <PwaInstallButton variant="floating" />
 
       {/* Interactive Modals */}
       {/* 1. Full CBT Test Taking Simulator Modal */}
@@ -436,7 +573,7 @@ function MainAppContent() {
         />
       )}
 
-      {/* 3. Student / Teacher Auth Modal */}
+      {/* 3. Student Auth Modal */}
       {authModalOpen && (
         <AuthModal
           isOpen={authModalOpen}
