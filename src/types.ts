@@ -9,6 +9,8 @@ export interface Question {
   explanation: string;
   ncertReference?: string;
   chapter?: string;
+  topic?: string;
+  difficulty?: Difficulty;
 }
 
 export interface TestItem {
@@ -26,7 +28,10 @@ export interface TestItem {
   rating: number;
   isPopular?: boolean;
   isNew?: boolean;
+  hasNegativeMarking?: boolean;
   questions: Question[];
+  created_at?: string;
+  isCustom?: boolean;
 }
 
 export interface UserAnswer {
@@ -36,8 +41,11 @@ export interface UserAnswer {
 }
 
 export interface TestResult {
+  id?: string;
   testId: string;
   testTitle: string;
+  studentEmail?: string;
+  studentName?: string;
   totalQuestions: number;
   attempted: number;
   correct: number;
@@ -48,15 +56,29 @@ export interface TestResult {
   accuracy: number;
   timeSpentSeconds: number;
   answers: Record<number, number | null>;
+  submittedAt?: string;
 }
 
-export type UserRole = 'student' | 'teacher';
+export type UserRole = 'student' | 'teacher' | 'admin';
 
 export interface UserProfile {
   name: string;
   email: string;
   role: UserRole;
+  avatarUrl?: string;
+  rollNumber?: string;
   targetExam?: 'NEET 2026' | 'NEET 2027' | 'JEE Main/Adv' | string;
+  targetScore?: number;
+  phone?: string;
   department?: string;
   isLoggedIn: boolean;
+}
+
+export interface TelegramConfig {
+  botToken: string;
+  chatId: string;
+  channelName?: string;
+  enabled: boolean;
+  notifyOnSubmission?: boolean;
+  notifyOnNewTest?: boolean;
 }

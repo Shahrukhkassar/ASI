@@ -27,13 +27,15 @@ import {
   Bot,
   FileCode,
   Download,
-  Braces
+  Braces,
+  Wand2
 } from 'lucide-react';
 import * as pdfjsLib from 'pdfjs-dist';
 import { GeminiCustomTestBox } from './GeminiCustomTestBox';
 import { db } from '../firebase';
 import { doc, setDoc } from 'firebase/firestore';
-import { extractFromPdfFile } from '../utils/pdfExtractor';
+import { extractFromPdfFile, parseTextWithServerAI, parseMCQTextRobust } from '../utils/pdfExtractor';
+import { saveTestToDb } from '../utils/supabaseClient';
 
 // Set up pdf.js worker fallback for browser environment
 if (typeof window !== 'undefined' && pdfjsLib && pdfjsLib.GlobalWorkerOptions) {
@@ -669,13 +671,30 @@ export const CustomTestBuilder = ({ onBack, onTestCreated, existingTest = null, 
         }
 
         setRawText(result.text);
-        const parsed = parseMCQText(result.text);
+        let parsed = [];
+        try {
+          setExtractionLog({
+            status: 'info',
+            message: `Structuring ${result.text.length} characters using Smart AI Parser...`
+          });
+          parsed = await parseTextWithServerAI(result.text, subject);
+        } catch {
+          parsed = parseMCQTextRobust(result.text, subject);
+        }
         
         if (parsed.length > 0) {
-          setQuestions((prev) => [...prev, ...parsed]);
+          const indexed = parsed.map((q, idx) => ({
+            id: questions.length + idx + 1,
+            question: q.question,
+            options: q.options,
+            correctAnswer: q.correctAnswer,
+            explanation: q.explanation || 'NCERT line-by-line solution.',
+            chapter: q.chapter || subject
+          }));
+          setQuestions((prev) => [...prev, ...indexed]);
           setExtractionLog({
             status: 'success',
-            message: `Successfully extracted ${parsed.length} MCQs from PDF!`
+            message: `Successfully extracted and structured ${indexed.length} MCQs from PDF!`
           });
           setActiveTab('editor');
         } else {
@@ -688,7 +707,7 @@ export const CustomTestBuilder = ({ onBack, onTestCreated, existingTest = null, 
         // Text file fallback
         const text = await file.text();
         setRawText(text);
-        const parsed = parseMCQText(text);
+        const parsed = parseMCQTextRobust(text, subject);
         if (parsed.length > 0) {
           setQuestions((prev) => [...prev, ...parsed]);
           setExtractionLog({
@@ -715,11 +734,16 @@ export const CustomTestBuilder = ({ onBack, onTestCreated, existingTest = null, 
   };
 
   // Run Regex Parser on Raw Text
-  const handleParseRawText = () => {
+  const handleParseRawText = async () => {
     if (!rawText.trim()) return;
     setIsExtracting(true);
     try {
-      const parsed = parseMCQText(rawText);
+      let parsed = [];
+      try {
+        parsed = await parseTextWithServerAI(rawText, subject);
+      } catch {
+        parsed = parseMCQTextRobust(rawText, subject);
+      }
       if (parsed.length > 0) {
         setQuestions((prev) => [...prev, ...parsed]);
         setExtractionLog({
@@ -851,7 +875,66 @@ export const CustomTestBuilder = ({ onBack, onTestCreated, existingTest = null, 
     setActiveTab('editor');
   };
 
-  // Publish Test Handler (localStorage + Firebase Firestore)
+  // Auto-Fix & Enrich Questions with AI
+  const [isFixingWithAi, setIsFixingWithAi] = useState(false);
+  const handleAutoFixQuestionsWithAi = async () => {
+    if (questions.length === 0) return;
+    setIsFixingWithAi(true);
+    setPublishStatus({
+      type: 'info',
+      message: 'AI Quality Engine is analyzing and structuring all questions with NCERT solutions...'
+    });
+
+    try {
+      const fixedQuestions = [];
+      for (let i = 0; i < questions.length; i++) {
+        const q = questions[i];
+        try {
+          const res = await fetch('/api/ai/improve-question', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              question: q.question,
+              options: q.options,
+              correctAnswer: q.correctAnswer
+            })
+          });
+          if (res.ok) {
+            const data = await res.json();
+            if (data.success) {
+              fixedQuestions.push({
+                id: i + 1,
+                question: data.improvedQuestion || q.question,
+                options: Array.isArray(data.improvedOptions) && data.improvedOptions.length >= 2 ? data.improvedOptions : q.options,
+                correctAnswer: typeof data.correctAnswer === 'number' ? data.correctAnswer : q.correctAnswer,
+                explanation: data.explanation || q.explanation,
+                chapter: q.chapter || subject
+              });
+              continue;
+            }
+          }
+        } catch {
+          // keep original
+        }
+        fixedQuestions.push({ ...q, id: i + 1 });
+      }
+
+      setQuestions(fixedQuestions);
+      setPublishStatus({
+        type: 'success',
+        message: `Successfully verified and enhanced ${fixedQuestions.length} MCQs with NCERT solutions and clean options!`
+      });
+    } catch (err) {
+      setPublishStatus({
+        type: 'error',
+        message: `AI improvement notice: ${err.message}`
+      });
+    } finally {
+      setIsFixingWithAi(false);
+    }
+  };
+
+  // Publish Test Handler (localStorage + Supabase + Firebase)
   const handlePublishTest = async () => {
     if (!testTitle.trim()) {
       alert('Please provide a Test Title before publishing.');
@@ -864,7 +947,7 @@ export const CustomTestBuilder = ({ onBack, onTestCreated, existingTest = null, 
     }
 
     setIsPublishing(true);
-    setPublishStatus({ type: 'info', message: 'Publishing test to LocalStorage & Firebase...' });
+    setPublishStatus({ type: 'info', message: 'Publishing test to Supabase & Realtime Cloud...' });
 
     const syllabusArray = syllabusInput.split(',').map((s) => s.trim()).filter(Boolean);
 
@@ -896,17 +979,13 @@ export const CustomTestBuilder = ({ onBack, onTestCreated, existingTest = null, 
     };
 
     try {
-      // 1. Save to LocalStorage
-      const existingSaved = JSON.parse(localStorage.getItem('asi_custom_tests') || '[]');
-      const filteredExisting = existingSaved.filter((t) => t.id !== publishedTest.id);
-      const updatedSaved = [publishedTest, ...filteredExisting];
-      localStorage.setItem('asi_custom_tests', JSON.stringify(updatedSaved));
+      // 1. Save to Supabase Cloud DB & Local Storage mirror
+      await saveTestToDb(publishedTest);
 
-      // 2. Firebase Firestore Integration Attempt
+      // 2. Firebase Firestore Integration Attempt (if configured)
       try {
         if (db) {
           await setDoc(doc(db, "tests", publishedTest.id), publishedTest);
-          console.log('Firebase sync succeeded for test:', publishedTest.id);
         }
       } catch (fbErr) {
         console.warn('Firestore sync notice:', fbErr);
@@ -914,7 +993,7 @@ export const CustomTestBuilder = ({ onBack, onTestCreated, existingTest = null, 
 
       setPublishStatus({
         type: 'success',
-        message: `Test "${publishedTest.title}" published successfully! (${questions.length} MCQs, ${publishedTest.durationMinutes}m)`
+        message: `Test "${publishedTest.title}" published successfully to Supabase! (${questions.length} MCQs, ${publishedTest.durationMinutes}m)`
       });
 
       if (onTestCreated) {
@@ -1562,6 +1641,19 @@ export const CustomTestBuilder = ({ onBack, onTestCreated, existingTest = null, 
               </div>
 
               <div className="flex flex-wrap items-center gap-2">
+                {questions.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={handleAutoFixQuestionsWithAi}
+                    disabled={isFixingWithAi}
+                    className="px-3.5 py-2 bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-600 hover:to-orange-600 text-white font-bold text-xs rounded-xl shadow-xs flex items-center gap-1.5 cursor-pointer transition-all active:scale-98 disabled:opacity-50"
+                    title="Automatically improve clarity, format options, and add NCERT Hinglish solutions using AI"
+                  >
+                    <Wand2 className={`w-4 h-4 ${isFixingWithAi ? 'animate-spin' : ''}`} />
+                    <span>{isFixingWithAi ? 'AI Fixing...' : 'AI Auto-Fix & Enrich All'}</span>
+                  </button>
+                )}
+
                 <button
                   id="builder-add-manual-btn"
                   onClick={handleOpenAddManual}

@@ -20,12 +20,13 @@ import { TestSimulatorModal } from './components/TestSimulatorModal';
 import { TestDetailsModal } from './components/TestDetailsModal';
 import { AuthModal } from './components/AuthModal';
 import { StudentDashboard } from './components/StudentDashboard';
-import { TeacherDashboard } from './components/TeacherDashboard';
+import { AdminDashboard } from './components/AdminDashboard';
 import { TeacherLoginPage } from './components/TeacherLoginPage';
 import { ToastProvider, useToast } from './components/Toast';
 
 import { MOCK_TESTS, INSTITUTE_INFO } from './data/mockTests';
 import { TestItem, TestCategory, Difficulty, UserProfile } from './types';
+import { subscribeToRealtimeTests, fetchAllTests } from './utils/supabaseClient';
 
 function MainAppContent() {
   // Navigation active section tracking
@@ -99,6 +100,23 @@ function MainAppContent() {
     }
     return MOCK_TESTS;
   });
+
+  // Listen to Supabase Cloud DB changes in realtime
+  useEffect(() => {
+    fetchAllTests().then((dbTests) => {
+      if (dbTests && dbTests.length > 0) {
+        setAllTests(dbTests);
+      }
+    }).catch(console.warn);
+
+    const unsubscribe = subscribeToRealtimeTests((freshTests) => {
+      if (freshTests && freshTests.length > 0) {
+        setAllTests(freshTests);
+      }
+    });
+
+    return () => unsubscribe();
+  }, []);
 
   // Auth modal state for students
   const [authModalOpen, setAuthModalOpen] = useState(false);
@@ -208,8 +226,8 @@ function MainAppContent() {
   if (user && user.isLoggedIn && currentRoute === 'dashboard') {
     return (
       <>
-        {user.role === 'teacher' ? (
-          <TeacherDashboard
+        {user.role === 'teacher' || user.role === 'admin' ? (
+          <AdminDashboard
             user={user}
             tests={allTests}
             onLogout={handleLogout}
@@ -230,6 +248,11 @@ function MainAppContent() {
             onGoHome={() => {
               window.location.hash = '#';
               setCurrentRoute('home');
+            }}
+            onUpdateProfile={(updated) => {
+              if (user) {
+                handleSetUser({ ...user, ...updated });
+              }
             }}
           />
         )}

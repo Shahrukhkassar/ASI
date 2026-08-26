@@ -24,6 +24,7 @@ import {
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
 import { TestItem, TestResult } from '../types';
+import { saveStudentResult } from '../utils/supabaseClient';
 
 interface TestSimulatorModalProps {
   test: TestItem | null;
@@ -326,9 +327,22 @@ export const TestSimulatorModal: React.FC<TestSimulatorModalProps> = ({
     const accuracy = attemptedCount > 0 ? Math.round((correctCount / attemptedCount) * 100) : 0;
     const timeSpent = (test.durationMinutes * 60) - timeLeft;
 
+    // Get candidate session details if logged in
+    let candidateName = 'Student Candidate';
+    let candidateEmail = 'student@neetprep.in';
+    try {
+      const session = JSON.parse(localStorage.getItem('asi_user_session') || '{}');
+      if (session.name) candidateName = session.name;
+      if (session.email) candidateEmail = session.email;
+    } catch {
+      // fallback
+    }
+
     const res: TestResult = {
       testId: test.id,
       testTitle: test.title,
+      studentName: candidateName,
+      studentEmail: candidateEmail,
       totalQuestions: test.questions.length,
       attempted: attemptedCount,
       correct: correctCount,
@@ -338,7 +352,8 @@ export const TestSimulatorModal: React.FC<TestSimulatorModalProps> = ({
       totalMarks: test.questions.length * 4,
       accuracy,
       timeSpentSeconds: Math.max(1, timeSpent),
-      answers
+      answers,
+      submittedAt: new Date().toISOString()
     };
 
     // Clean up draft storage
@@ -346,6 +361,27 @@ export const TestSimulatorModal: React.FC<TestSimulatorModalProps> = ({
       localStorage.removeItem(`cbt_answers_${test.id}`);
       localStorage.removeItem(`cbt_marked_${test.id}`);
       localStorage.removeItem(`cbt_time_${test.id}`);
+    } catch {
+      // ignore
+    }
+
+    // Save result to Supabase / LocalStorage
+    saveStudentResult(res).catch(console.warn);
+
+    // If Telegram Submission Notification is enabled, dispatch alert
+    try {
+      const tgConfig = JSON.parse(localStorage.getItem('asi_telegram_config') || '{}');
+      if (tgConfig.enabled && tgConfig.notifyOnSubmission && tgConfig.botToken && tgConfig.chatId) {
+        fetch('/api/telegram/notify', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            botToken: tgConfig.botToken,
+            chatId: tgConfig.chatId,
+            message: `📊 <b>New CBT Scorecard Submitted!</b>\n\n👤 <b>Candidate:</b> ${candidateName}\n📝 <b>Test:</b> ${test.title}\n🎯 <b>Score:</b> ${calculatedScore} / ${test.questions.length * 4}\n✅ <b>Accuracy:</b> ${accuracy}%\n⏱️ <b>Time Taken:</b> ${Math.round(timeSpent / 60)} mins`
+          })
+        }).catch(console.warn);
+      }
     } catch {
       // ignore
     }
