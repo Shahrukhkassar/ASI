@@ -31,9 +31,11 @@ export const Footer: React.FC<FooterProps> = ({
           {/* Col 1: Institute Brand & Bio (4 cols) */}
           <div className="lg:col-span-4 space-y-4">
             <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-xl bg-violet-600 text-white flex items-center justify-center font-extrabold text-base shadow-md shadow-violet-600/30">
-                ASI
-              </div>
+              <img 
+                src="/icons/icon-192x192.png" 
+                alt="Amerj Sir Institute" 
+                className="w-10 h-10 rounded-xl shadow-md shadow-violet-600/30 object-contain bg-violet-600 p-0.5" 
+              />
               <div>
                 <span className="text-lg font-bold text-white tracking-tight">Amerj Sir Institute</span>
                 <p className="text-xs text-violet-400 font-medium">NEET &amp; JEE Biology Online Platform</p>

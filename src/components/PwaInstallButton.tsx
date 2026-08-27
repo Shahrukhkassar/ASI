@@ -148,9 +148,7 @@ export const PwaInstallButton: React.FC<PwaInstallButtonProps> = ({
         >
           <div className="flex items-start justify-between gap-3">
             <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-xl bg-violet-600 flex items-center justify-center font-bold text-white text-base shadow-md shrink-0">
-                ASI
-              </div>
+              <img src="/icons/icon-192x192.png" alt="ASI" className="w-10 h-10 rounded-xl shadow-md shrink-0 object-contain bg-violet-600 p-0.5" />
               <div>
                 <h4 className="text-sm font-bold text-white">Install ASI NEET App</h4>
                 <p className="text-xs text-slate-300">Fast CBT practice, offline mode &amp; rank alerts.</p>
@@ -198,9 +196,7 @@ const IOSInstallGuideModal: React.FC<{ onClose: () => void }> = ({ onClose }) =>
       <div className="bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl border border-violet-100 text-slate-900 space-y-4 animate-in zoom-in-95">
         <div className="flex items-center justify-between pb-3 border-b border-slate-100">
           <div className="flex items-center gap-2.5">
-            <div className="w-9 h-9 rounded-xl bg-violet-600 text-white flex items-center justify-center font-bold text-sm">
-              ASI
-            </div>
+            <img src="/icons/icon-192x192.png" alt="ASI" className="w-10 h-10 rounded-xl shadow-md shrink-0 object-contain bg-violet-600 p-0.5" />
             <div>
               <h3 className="text-base font-bold text-slate-900">Install ASI CBT App</h3>
               <p className="text-xs text-slate-500">Add to your Home Screen for instant access</p>

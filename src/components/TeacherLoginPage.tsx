@@ -137,9 +137,7 @@ export const TeacherLoginPage: React.FC<TeacherLoginPageProps> = ({
         </button>
 
         <div className="flex items-center gap-2">
-          <div className="w-8 h-8 rounded-lg bg-violet-600 flex items-center justify-center font-extrabold text-xs text-white">
-            ASI
-          </div>
+          <img src="/icons/icon-192x192.png" alt="ASI" className="w-8 h-8 rounded-lg shadow-sm object-contain bg-violet-600 p-0.5" />
           <span className="font-bold text-sm text-white hidden sm:inline">Amerj Sir Institute</span>
         </div>
       </header>

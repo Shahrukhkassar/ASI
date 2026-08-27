@@ -76,9 +76,11 @@ export const Navbar: React.FC<NavbarProps> = ({
             onClick={() => handleNavClick('hero')} 
             className="flex items-center gap-3 cursor-pointer group select-none"
           >
-            <div className="w-11 h-11 rounded-xl bg-gradient-to-br from-violet-600 to-indigo-600 flex items-center justify-center text-white shadow-md shadow-violet-600/20 group-hover:scale-105 transition-transform duration-200">
-              <span className="font-extrabold text-lg tracking-wider">ASI</span>
-            </div>
+            <img 
+              src="/icons/icon-192x192.png" 
+              alt="Amerj Sir Institute" 
+              className="w-11 h-11 rounded-xl shadow-md shadow-violet-600/20 group-hover:scale-105 transition-transform duration-200 object-contain bg-violet-600 p-0.5" 
+            />
             <div className="flex flex-col">
               <div className="flex items-center gap-1.5">
                 <span className="text-xl font-bold text-slate-900 tracking-tight group-hover:text-violet-600 transition-colors">

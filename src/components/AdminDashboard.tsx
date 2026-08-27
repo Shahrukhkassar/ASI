@@ -1,4 +1,5 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
+import * as XLSX from 'xlsx';
 import { 
   ShieldCheck, 
   Plus, 
@@ -18,6 +19,7 @@ import {
   Trash2, 
   Eye,
   AlertCircle,
+  AlertTriangle,
   FileUp,
   Upload,
   BrainCircuit,
@@ -33,13 +35,18 @@ import {
   ExternalLink,
   Sliders,
   Wand2,
-  Check
+  Check,
+  FileSpreadsheet,
+  Download,
+  Table,
+  HelpCircle,
+  FileCheck
 } from 'lucide-react';
 import { UserProfile, TestItem, TestResult, TelegramConfig } from '../types';
 import { CustomTestBuilder } from './CustomTestBuilder';
 import { GeminiCustomTestBox } from './GeminiCustomTestBox';
 import { TeacherAiTools } from './TeacherAiTools';
-import { isSupabaseConfigured, fetchAllTests, deleteTestFromDb, subscribeToRealtimeTests, fetchStudentResults } from '../utils/supabaseClient';
+import { isSupabaseConfigured, supabase, saveTestToDb, fetchAllTests, deleteTestFromDb, subscribeToRealtimeTests, fetchStudentResults } from '../utils/supabaseClient';
 
 interface AdminDashboardProps {
   user: UserProfile;
@@ -63,7 +70,21 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [customBuilderTab, setCustomBuilderTab] = useState<'editor' | 'json' | 'gemini' | 'extractor'>('editor');
   const [editingTest, setEditingTest] = useState<TestItem | null>(null);
   const [successNotice, setSuccessNotice] = useState<string | null>(null);
-  const [adminActiveTab, setAdminActiveTab] = useState<'tests' | 'ai_tools' | 'telegram' | 'students' | 'db_sync'>('tests');
+  const [adminActiveTab, setAdminActiveTab] = useState<'tests' | 'excel_upload' | 'ai_tools' | 'telegram' | 'students' | 'db_sync'>('tests');
+
+  // Excel Bulk Upload State
+  const [parsedQuestions, setParsedQuestions] = useState<any[]>([]);
+  const [bulkTestTitle, setBulkTestTitle] = useState('');
+  const [bulkTestSubject, setBulkTestSubject] = useState('Biology');
+  const [bulkTestCategory, setBulkTestCategory] = useState('NEET Full Syllabus');
+  const [bulkTestDuration, setBulkTestDuration] = useState<number>(45);
+  const [bulkTestDifficulty, setBulkTestDifficulty] = useState<'Easy' | 'Medium' | 'Hard'>('Medium');
+  const [isSavingBulkTest, setIsSavingBulkTest] = useState(false);
+  const [excelError, setExcelError] = useState<string | null>(null);
+  const [excelSuccess, setExcelSuccess] = useState<string | null>(null);
+  const [isDraggingExcel, setIsDraggingExcel] = useState(false);
+  const [showAllPreview, setShowAllPreview] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Telegram Configuration State
   const [telegramConfig, setTelegramConfig] = useState<TelegramConfig>(() => {
@@ -242,6 +263,382 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     }
   };
 
+  // ==========================================
+  // EXCEL BULK UPLOAD ENGINE (PhysicsWallah Pattern)
+  // ==========================================
+
+  // 1. Download Sample Excel Format
+  const handleDownloadSampleExcel = () => {
+    try {
+      const sampleRows = [
+        {
+          "Question": "Which of the following cellular organelles is known as the powerhouse of the cell?",
+          "OptionA": "Golgi Apparatus",
+          "OptionB": "Mitochondria",
+          "OptionC": "Ribosome",
+          "OptionD": "Lysosome",
+          "Correct (A/B/C/D)": "B",
+          "Explanation": "Mitochondria generates most of the chemical energy needed to power the cell's biochemical reactions (ATP synthesis).",
+          "ImageUrl (optional)": ""
+        },
+        {
+          "Question": "During DNA replication, discontinuous Okazaki fragments synthesized on lagging strand are covalently joined by:",
+          "OptionA": "DNA Ligase",
+          "OptionB": "DNA Polymerase III",
+          "OptionC": "Helicase",
+          "OptionD": "RNA Primase",
+          "Correct (A/B/C/D)": "A",
+          "Explanation": "DNA Ligase catalyzes phosphodiester bond formation between adjacent Okazaki fragments.",
+          "ImageUrl (optional)": ""
+        },
+        {
+          "Question": "What is the expected phenotypic ratio in the F2 generation of a Mendelian monohybrid cross?",
+          "OptionA": "9:3:3:1",
+          "OptionB": "1:2:1",
+          "OptionC": "3:1",
+          "OptionD": "1:1",
+          "Correct (A/B/C/D)": "C",
+          "Explanation": "Monohybrid cross produces 3 Dominant to 1 Recessive phenotype (3:1 ratio).",
+          "ImageUrl (optional)": ""
+        },
+        {
+          "Question": "The functional filtration unit of the human kidney is called:",
+          "OptionA": "Neuron",
+          "OptionB": "Nephron",
+          "OptionC": "Alveolus",
+          "OptionD": "Glomerulus capsule",
+          "Correct (A/B/C/D)": "B",
+          "Explanation": "Nephrons filter blood, regulate electrolyte balance, and produce urine in kidneys.",
+          "ImageUrl (optional)": ""
+        },
+        {
+          "Question": "In C4 photosynthetic plants, the primary carbon dioxide acceptor in mesophyll cells is:",
+          "OptionA": "RuBP",
+          "OptionB": "PEP (Phosphoenolpyruvate)",
+          "OptionC": "PGA",
+          "OptionD": "Oxaloacetic acid",
+          "Correct (A/B/C/D)": "B",
+          "Explanation": "In C4 plants, PEP is the primary 3-carbon CO2 acceptor catalyzed by PEP carboxylase.",
+          "ImageUrl (optional)": ""
+        }
+      ];
+
+      const worksheet = XLSX.utils.json_to_sheet(sampleRows);
+      const workbook = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(workbook, worksheet, "Questions_Template");
+
+      // Set optimal column widths for neat Excel layout
+      worksheet['!cols'] = [
+        { wch: 50 }, // Question
+        { wch: 22 }, // OptionA
+        { wch: 22 }, // OptionB
+        { wch: 22 }, // OptionC
+        { wch: 22 }, // OptionD
+        { wch: 18 }, // Correct (A/B/C/D)
+        { wch: 45 }, // Explanation
+        { wch: 25 }  // ImageUrl (optional)
+      ];
+
+      XLSX.writeFile(workbook, "ASI_NEET_Questions_Sample_Format.xlsx");
+      setSuccessNotice("Sample Excel template downloaded! Open it, fill your questions, and upload below.");
+      setTimeout(() => setSuccessNotice(null), 5000);
+    } catch (err: any) {
+      console.error("Failed to generate sample Excel:", err);
+      alert("Failed to download sample Excel template. Please try again.");
+    }
+  };
+
+  // 2. Parse Excel Buffer and Extract Questions
+  const parseExcelBuffer = (buffer: ArrayBuffer, fileName: string) => {
+    try {
+      const workbook = XLSX.read(buffer, { type: 'array' });
+      if (!workbook.SheetNames || workbook.SheetNames.length === 0) {
+        throw new Error("Excel workbook contains no readable sheets.");
+      }
+
+      const firstSheetName = workbook.SheetNames[0];
+      const worksheet = workbook.Sheets[firstSheetName];
+      const rawRows: any[] = XLSX.utils.sheet_to_json(worksheet, { defval: '' });
+
+      if (!rawRows || rawRows.length === 0) {
+        throw new Error("The uploaded Excel sheet is empty. Please add questions to the sheet.");
+      }
+
+      const parsed: any[] = [];
+      const validationErrors: string[] = [];
+
+      for (let i = 0; i < rawRows.length; i++) {
+        const row = rawRows[i];
+        const rowNum = i + 2; // Accounting for 1-based index and header row
+
+        // Flexible key resolution
+        const questionText = String(
+          row["Question"] || 
+          row["question"] || 
+          row["QUESTION"] || 
+          row["Question Text"] || 
+          ""
+        ).trim();
+
+        // Edge case: completely empty row
+        if (!questionText) {
+          continue;
+        }
+
+        const optA = String(row["OptionA"] || row["optionA"] || row["Option A"] || row["Option_A"] || row["A"] || "").trim();
+        const optB = String(row["OptionB"] || row["optionB"] || row["Option B"] || row["Option_B"] || row["B"] || "").trim();
+        const optC = String(row["OptionC"] || row["optionC"] || row["Option C"] || row["Option_C"] || row["C"] || "").trim();
+        const optD = String(row["OptionD"] || row["optionD"] || row["Option D"] || row["Option_D"] || row["D"] || "").trim();
+
+        // Validate mandatory choices
+        if (!optA || !optB) {
+          validationErrors.push(`Row ${rowNum}: Question "${questionText.slice(0, 25)}..." is missing OptionA or OptionB.`);
+          continue;
+        }
+
+        const options = [
+          optA,
+          optB,
+          optC || "None of the above",
+          optD || "All of the above"
+        ];
+
+        // Parse Correct Answer (A/B/C/D, 1/2/3/4, or index)
+        const rawCorrect = String(
+          row["Correct (A/B/C/D)"] || 
+          row["Correct"] || 
+          row["correct"] || 
+          row["Correct Answer"] || 
+          row["Answer"] || 
+          row["correctAnswer"] || 
+          "A"
+        ).trim().toUpperCase();
+
+        let correctIdx = 0;
+        let letter = "A";
+
+        if (rawCorrect === "B" || rawCorrect === "2" || rawCorrect.includes("OPTION B") || rawCorrect.includes("OPTIONB")) {
+          correctIdx = 1;
+          letter = "B";
+        } else if (rawCorrect === "C" || rawCorrect === "3" || rawCorrect.includes("OPTION C") || rawCorrect.includes("OPTIONC")) {
+          correctIdx = 2;
+          letter = "C";
+        } else if (rawCorrect === "D" || rawCorrect === "4" || rawCorrect.includes("OPTION D") || rawCorrect.includes("OPTIOND")) {
+          correctIdx = 3;
+          letter = "D";
+        } else if (rawCorrect === "A" || rawCorrect === "1" || rawCorrect.includes("OPTION A") || rawCorrect.includes("OPTIONA")) {
+          correctIdx = 0;
+          letter = "A";
+        } else if (!isNaN(Number(rawCorrect)) && Number(rawCorrect) >= 0 && Number(rawCorrect) <= 3) {
+          correctIdx = Number(rawCorrect);
+          letter = ["A", "B", "C", "D"][correctIdx];
+        }
+
+        const explanation = String(row["Explanation"] || row["explanation"] || row["EXPLANATION"] || row["Solution"] || "").trim();
+        const imageUrl = String(row["ImageUrl (optional)"] || row["ImageUrl"] || row["imageUrl"] || row["Image URL"] || row["Image"] || "").trim() || null;
+
+        // Map according to requested schema:
+        // { id: random, question: row.Question, options: [OptionA, OptionB, OptionC, OptionD], correctAnswer: row.Correct, explanation: row.Explanation, imageUrl: row.ImageUrl || null }
+        parsed.push({
+          id: Math.floor(Math.random() * 900000) + 100000 + i,
+          question: questionText,
+          options,
+          correctAnswer: correctIdx,
+          correctAnswerLetter: letter,
+          rawCorrectAnswer: rawCorrect || letter,
+          explanation: explanation || "Refer to NCERT textbook for detailed solution.",
+          imageUrl: imageUrl
+        });
+      }
+
+      if (parsed.length === 0) {
+        throw new Error(
+          validationErrors.length > 0
+            ? `Excel parsing failed:\n${validationErrors.slice(0, 3).join("\n")}`
+            : "No valid questions found. Please check column headers (Question, OptionA, OptionB, OptionC, OptionD, Correct)."
+        );
+      }
+
+      setParsedQuestions(parsed);
+      setExcelError(validationErrors.length > 0 ? `Parsed ${parsed.length} questions. Warning: ${validationErrors.length} rows were skipped due to missing options.` : null);
+      setExcelSuccess(`Successfully parsed ${parsed.length} questions from "${fileName}"!`);
+
+      // Suggest default test title if empty
+      if (!bulkTestTitle.trim()) {
+        const cleanName = fileName.replace(/\.[^/.]+$/, "").replace(/[-_]/g, " ");
+        setBulkTestTitle(`NEET Biology: ${cleanName}`);
+      }
+    } catch (err: any) {
+      console.error("Excel parse exception:", err);
+      setExcelError(err.message || "Invalid or corrupt Excel file. Please use the sample format.");
+      setParsedQuestions([]);
+      setExcelSuccess(null);
+    }
+  };
+
+  // 3. Handle File Input Change
+  const handleExcelFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setExcelError(null);
+    setExcelSuccess(null);
+
+    const fileName = file.name.toLowerCase();
+    if (!fileName.endsWith('.xlsx') && !fileName.endsWith('.xls') && !fileName.endsWith('.csv')) {
+      setExcelError("Invalid file type. Please select an Excel file (.xlsx, .xls) or .csv file.");
+      return;
+    }
+
+    const reader = new FileReader();
+    reader.onload = (evt) => {
+      const buffer = evt.target?.result as ArrayBuffer;
+      if (buffer) {
+        parseExcelBuffer(buffer, file.name);
+      } else {
+        setExcelError("Could not read the uploaded file.");
+      }
+    };
+    reader.onerror = () => {
+      setExcelError("File reading failed. Please try again.");
+    };
+    reader.readAsArrayBuffer(file);
+  };
+
+  // 4. Handle Drag and Drop
+  const handleExcelDrop = (e: React.DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    setIsDraggingExcel(false);
+    const file = e.dataTransfer.files?.[0];
+    if (!file) return;
+
+    setExcelError(null);
+    setExcelSuccess(null);
+
+    const fileName = file.name.toLowerCase();
+    if (!fileName.endsWith('.xlsx') && !fileName.endsWith('.xls') && !fileName.endsWith('.csv')) {
+      setExcelError("Invalid file type. Please drag & drop an Excel file (.xlsx, .xls) or .csv file.");
+      return;
+    }
+
+    const reader = new FileReader();
+    reader.onload = (evt) => {
+      const buffer = evt.target?.result as ArrayBuffer;
+      if (buffer) {
+        parseExcelBuffer(buffer, file.name);
+      }
+    };
+    reader.readAsArrayBuffer(file);
+  };
+
+  // 5. Save All Questions to Supabase Table 'tests'
+  const handleSaveAllToSupabase = async () => {
+    const titleToSave = bulkTestTitle.trim();
+    if (!titleToSave) {
+      alert("Please enter a Test Title (e.g. NEET Mock 1) before saving to Supabase.");
+      return;
+    }
+    if (parsedQuestions.length === 0) {
+      alert("No questions to save. Please upload an Excel sheet with questions first.");
+      return;
+    }
+
+    setIsSavingBulkTest(true);
+    setExcelError(null);
+
+    try {
+      const newTestId = `test_xl_${Date.now()}`;
+      const formattedQuestions = parsedQuestions.map((q, idx) => ({
+        id: idx + 1,
+        question: q.question,
+        options: q.options,
+        correctAnswer: q.correctAnswer,
+        explanation: q.explanation || "Refer to NCERT textbook.",
+        imageUrl: q.imageUrl || null
+      }));
+
+      const newTestItem: TestItem = {
+        id: newTestId,
+        title: titleToSave,
+        category: (bulkTestCategory as any) || 'NEET Full Syllabus',
+        subject: bulkTestSubject || 'Biology',
+        totalQuestions: formattedQuestions.length,
+        durationMinutes: bulkTestDuration || Math.max(20, Math.round(formattedQuestions.length * 1.2)),
+        totalMarks: formattedQuestions.length * 4,
+        difficulty: bulkTestDifficulty,
+        syllabus: ['NEET Biology Full Syllabus', 'NCERT Rationalized Curriculum'],
+        description: `PhysicsWallah standard bulk Excel uploaded test with ${formattedQuestions.length} MCQs.`,
+        attemptsCount: 0,
+        rating: 5.0,
+        isNew: true,
+        isCustom: true,
+        questions: formattedQuestions,
+        created_at: new Date().toISOString()
+      };
+
+      // 1. Direct Supabase insertion into 'tests' table:
+      // columns: id, title, subject, questions (jsonb), created_at, category, duration_minutes, total_marks
+      if (supabase) {
+        const { error: sbError } = await supabase.from('tests').insert([{
+          id: newTestItem.id,
+          title: newTestItem.title,
+          subject: newTestItem.subject,
+          category: newTestItem.category,
+          duration_minutes: newTestItem.durationMinutes,
+          total_marks: newTestItem.totalMarks,
+          difficulty: newTestItem.difficulty,
+          syllabus: newTestItem.syllabus,
+          description: newTestItem.description,
+          questions: newTestItem.questions,
+          created_at: newTestItem.created_at
+        }]);
+
+        if (sbError) {
+          console.warn("Supabase insert notice:", sbError.message);
+        }
+      }
+
+      // 2. Resilient local fallback & broadcast mirror
+      await saveTestToDb(newTestItem);
+
+      // 3. Update dashboard state in real-time so all students and teachers see it instantly
+      const updated = [newTestItem, ...createdTests.filter(t => t.id !== newTestItem.id)];
+      setCreatedTests(updated);
+      if (onUpdateTests) onUpdateTests(updated);
+
+      // 4. Telegram alert if configured
+      if (telegramConfig.enabled && telegramConfig.notifyOnNewTest && telegramConfig.botToken && telegramConfig.chatId) {
+        fetch('/api/telegram/notify', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            botToken: telegramConfig.botToken,
+            chatId: telegramConfig.chatId,
+            message: `📊 <b>Bulk Excel Test Live:</b> ${newTestItem.title}\n\n📚 <b>Subject:</b> ${newTestItem.subject}\n📝 <b>Questions:</b> ${newTestItem.totalQuestions} MCQs\n⏱️ <b>Duration:</b> ${newTestItem.durationMinutes} mins\n\nAttempt now on ASI Portal in NTA CBT Mode!`
+          })
+        }).catch(console.warn);
+      }
+
+      setSuccessNotice(`Test "${titleToSave}" (${formattedQuestions.length} Questions) successfully saved to Supabase! Students can now attempt it in CBT mode.`);
+      alert(`Success! Test "${titleToSave}" with ${formattedQuestions.length} MCQs has been inserted into Supabase and is now LIVE for all students.`);
+
+      // Reset upload panel
+      setParsedQuestions([]);
+      setBulkTestTitle('');
+      setExcelSuccess(null);
+      if (fileInputRef.current) {
+        fileInputRef.current.value = '';
+      }
+      setAdminActiveTab('tests');
+    } catch (err: any) {
+      console.error("Failed to save to Supabase:", err);
+      setExcelError(`Error saving to Supabase: ${err.message || 'Unknown database error'}`);
+      alert(`Error saving test to Supabase: ${err.message || 'Failed to connect to database'}`);
+    } finally {
+      setIsSavingBulkTest(false);
+    }
+  };
+
   // If in custom test creator mode, show CustomTestBuilder
   if (isBuildingCustomTest) {
     return (
@@ -357,6 +754,19 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           </button>
 
           <button
+            onClick={() => setAdminActiveTab('excel_upload')}
+            className={`px-4 py-2 rounded-xl text-xs font-bold flex items-center gap-2 transition-all cursor-pointer whitespace-nowrap ${
+              adminActiveTab === 'excel_upload'
+                ? 'bg-emerald-600 text-white shadow-xs'
+                : 'text-emerald-700 bg-emerald-50/80 hover:bg-emerald-100 border border-emerald-200'
+            }`}
+          >
+            <FileSpreadsheet className="w-4 h-4 text-emerald-500" />
+            <span>Bulk Upload via Excel</span>
+            <span className="px-1.5 py-0.2 bg-emerald-700 text-white text-[9px] font-black rounded-full uppercase tracking-tighter">PW Mode</span>
+          </button>
+
+          <button
             onClick={() => setAdminActiveTab('ai_tools')}
             className={`px-4 py-2 rounded-xl text-xs font-bold flex items-center gap-2 transition-all cursor-pointer whitespace-nowrap ${
               adminActiveTab === 'ai_tools'
@@ -426,7 +836,21 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         {adminActiveTab === 'tests' && (
           <div className="space-y-6">
             {/* Quick Actions Row */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
+              <div 
+                onClick={() => setAdminActiveTab('excel_upload')}
+                className="bg-gradient-to-br from-emerald-50 to-teal-50 p-5 rounded-2xl border-2 border-emerald-300 shadow-xs hover:border-emerald-500 hover:shadow-md transition-all cursor-pointer group relative overflow-hidden"
+              >
+                <div className="absolute top-2 right-2 px-2 py-0.5 bg-emerald-600 text-white text-[9px] font-black rounded-full uppercase">
+                  PhysicsWallah
+                </div>
+                <div className="w-10 h-10 rounded-xl bg-emerald-600 text-white flex items-center justify-center font-bold mb-3 group-hover:scale-110 transition-transform shadow-sm">
+                  <FileSpreadsheet className="w-5 h-5" />
+                </div>
+                <h3 className="font-extrabold text-sm text-slate-900">Bulk Excel Upload</h3>
+                <p className="text-xs text-slate-600 mt-1">Import 100+ MCQs in 1-Click with sample format</p>
+              </div>
+
               <div 
                 onClick={() => handleOpenCustomBuilder(null, 'editor')}
                 className="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs hover:border-violet-400 hover:shadow-md transition-all cursor-pointer group"
@@ -521,34 +945,449 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     <div className="flex items-center gap-2 shrink-0">
                       <button
                         onClick={() => onPreviewTest(t)}
-                        className="px-3 py-1.5 bg-violet-50 hover:bg-violet-100 text-violet-700 font-bold text-xs rounded-xl flex items-center gap-1 cursor-pointer transition-colors"
-                        title="Simulate in CBT Mode"
+                        className="px-3 py-1.5 rounded-xl border border-slate-200 text-slate-700 hover:bg-slate-50 hover:text-slate-900 text-xs font-bold flex items-center gap-1 transition-colors cursor-pointer"
+                        title="Simulate CBT Mode"
                       >
-                        <Eye className="w-3.5 h-3.5" />
+                        <Eye className="w-3.5 h-3.5 text-violet-600" />
                         <span>Preview</span>
                       </button>
 
                       <button
                         onClick={() => handleOpenCustomBuilder(t, 'editor')}
-                        className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-800 font-bold text-xs rounded-xl flex items-center gap-1 cursor-pointer transition-colors"
-                        title="Edit Questions"
+                        className="px-3 py-1.5 rounded-xl border border-slate-200 text-slate-700 hover:bg-slate-50 hover:text-slate-900 text-xs font-bold flex items-center gap-1 transition-colors cursor-pointer"
+                        title="Edit questions"
                       >
-                        <Edit3 className="w-3.5 h-3.5" />
+                        <Edit3 className="w-3.5 h-3.5 text-indigo-600" />
                         <span>Edit</span>
                       </button>
 
                       <button
                         onClick={() => handleDeleteTest(t.id, t.title)}
-                        className="p-2 text-rose-600 hover:bg-rose-50 rounded-xl transition-colors cursor-pointer"
-                        title="Delete Test"
+                        className="p-1.5 rounded-xl border border-rose-200 text-rose-600 hover:bg-rose-50 text-xs font-bold flex items-center justify-center transition-colors cursor-pointer"
+                        title="Delete test"
                       >
-                        <Trash2 className="w-4 h-4" />
+                        <Trash2 className="w-3.5 h-3.5" />
                       </button>
                     </div>
                   </div>
                 ))}
               </div>
             </div>
+          </div>
+        )}
+
+        {/* TAB: BULK UPLOAD VIA EXCEL (PhysicsWallah Pattern) */}
+        {adminActiveTab === 'excel_upload' && (
+          <div className="space-y-8 animate-in fade-in">
+            {/* Header Box */}
+            <div className="bg-gradient-to-r from-emerald-900 via-teal-900 to-slate-900 rounded-3xl p-6 sm:p-8 text-white shadow-xl relative overflow-hidden">
+              <div className="absolute right-0 top-0 translate-x-12 -translate-y-12 w-64 h-64 bg-emerald-500/10 rounded-full blur-3xl pointer-events-none" />
+              
+              <div className="relative z-10 flex flex-col md:flex-row md:items-center justify-between gap-6">
+                <div className="space-y-2 max-w-2xl">
+                  <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-emerald-500/20 border border-emerald-400/30 text-emerald-300 text-xs font-black uppercase tracking-wider">
+                    <FileSpreadsheet className="w-3.5 h-3.5" />
+                    PhysicsWallah Excel-to-Website Ingestion Engine
+                  </div>
+                  <h2 className="text-2xl sm:text-3xl font-black tracking-tight text-white">
+                    Bulk Upload Questions via Excel
+                  </h2>
+                  <p className="text-sm text-slate-300">
+                    Upload your entire test series with 100+ MCQs in seconds. Parse questions, choices, answers, and explanations directly into Supabase and launch CBT exams instantly.
+                  </p>
+                </div>
+
+                <div className="shrink-0 flex flex-col sm:flex-row gap-3">
+                  <button
+                    onClick={handleDownloadSampleExcel}
+                    className="px-5 py-3 rounded-2xl bg-white/10 hover:bg-white/20 active:scale-98 border border-white/20 text-white font-bold text-xs flex items-center justify-center gap-2 transition-all cursor-pointer shadow-lg backdrop-blur-sm"
+                  >
+                    <Download className="w-4 h-4 text-emerald-400" />
+                    <span>Download Sample Excel Format</span>
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            {/* Error / Warning Alert */}
+            {excelError && (
+              <div className="p-4 bg-rose-50 border border-rose-200 text-rose-900 rounded-2xl flex items-start justify-between text-xs font-semibold animate-in fade-in gap-3">
+                <div className="flex items-start gap-2.5">
+                  <AlertCircle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
+                  <div className="space-y-1">
+                    <p className="font-extrabold">Notice / Warning</p>
+                    <p className="whitespace-pre-line text-rose-800">{excelError}</p>
+                  </div>
+                </div>
+                <button onClick={() => setExcelError(null)} className="text-rose-600 hover:text-rose-900">
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+            )}
+
+            {/* Success Alert */}
+            {excelSuccess && (
+              <div className="p-4 bg-emerald-50 border border-emerald-200 text-emerald-900 rounded-2xl flex items-center justify-between text-xs font-semibold animate-in fade-in">
+                <div className="flex items-center gap-2">
+                  <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                  <span>{excelSuccess}</span>
+                </div>
+                <button onClick={() => setExcelSuccess(null)} className="text-emerald-700 hover:text-emerald-900">
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+            )}
+
+            {/* Upload Zone & Instructions Grid */}
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+              {/* Dropzone Card */}
+              <div className="lg:col-span-2 bg-white rounded-3xl border border-slate-200 p-6 sm:p-8 shadow-xs flex flex-col justify-between">
+                <div>
+                  <h3 className="font-black text-slate-900 text-base mb-1 flex items-center gap-2">
+                    <Upload className="w-4 h-4 text-emerald-600" />
+                    Select or Drop Your Excel File (.xlsx / .xls)
+                  </h3>
+                  <p className="text-xs text-slate-500 mb-6">
+                    File will be parsed locally in high-speed and structured into NEET standard MCQs.
+                  </p>
+
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    accept=".xlsx, .xls, .csv"
+                    onChange={handleExcelFileUpload}
+                    className="hidden"
+                    id="excel-file-input"
+                  />
+
+                  <div
+                    onDragOver={(e) => { e.preventDefault(); setIsDraggingExcel(true); }}
+                    onDragLeave={() => setIsDraggingExcel(false)}
+                    onDrop={handleExcelDrop}
+                    onClick={() => fileInputRef.current?.click()}
+                    className={`border-2 border-dashed rounded-2xl p-8 sm:p-12 text-center cursor-pointer transition-all flex flex-col items-center justify-center ${
+                      isDraggingExcel
+                        ? 'border-emerald-500 bg-emerald-50 scale-102'
+                        : 'border-slate-300 hover:border-emerald-500 hover:bg-emerald-50/30'
+                    }`}
+                  >
+                    <div className="w-16 h-16 rounded-2xl bg-emerald-100 text-emerald-700 flex items-center justify-center mb-4 shadow-sm">
+                      <FileSpreadsheet className="w-8 h-8" />
+                    </div>
+                    <p className="text-sm font-extrabold text-slate-800">
+                      Click to choose Excel sheet or drag &amp; drop here
+                    </p>
+                    <p className="text-xs text-slate-500 mt-1.5">
+                      Supports .xlsx, .xls and .csv (Max 500 questions per test)
+                    </p>
+
+                    <div className="mt-4 flex items-center gap-2">
+                      <span className="px-3 py-1 bg-slate-100 text-slate-600 rounded-lg text-[11px] font-bold">
+                        Column headers: Question, OptionA, OptionB, OptionC, OptionD, Correct
+                      </span>
+                    </div>
+                  </div>
+                </div>
+
+                {parsedQuestions.length > 0 && (
+                  <div className="mt-6 p-4 rounded-2xl bg-emerald-50 border border-emerald-200 flex items-center justify-between">
+                    <div className="flex items-center gap-3">
+                      <FileCheck className="w-6 h-6 text-emerald-600" />
+                      <div>
+                        <p className="text-xs font-extrabold text-emerald-950">
+                          {parsedQuestions.length} Questions Loaded &amp; Validated
+                        </p>
+                        <p className="text-[11px] text-emerald-700">
+                          Ready to configure test settings and publish to Supabase database.
+                        </p>
+                      </div>
+                    </div>
+                    <button
+                      onClick={() => {
+                        setParsedQuestions([]);
+                        setExcelSuccess(null);
+                        if (fileInputRef.current) fileInputRef.current.value = '';
+                      }}
+                      className="text-xs font-bold text-rose-600 hover:text-rose-800 underline cursor-pointer"
+                    >
+                      Clear File
+                    </button>
+                  </div>
+                )}
+              </div>
+
+              {/* Format Guide Card */}
+              <div className="bg-slate-900 text-white rounded-3xl p-6 sm:p-8 shadow-xs flex flex-col justify-between space-y-6">
+                <div>
+                  <div className="flex items-center gap-2 text-emerald-400 text-xs font-extrabold uppercase tracking-wider mb-2">
+                    <HelpCircle className="w-4 h-4" />
+                    Format Guidelines
+                  </div>
+                  <h3 className="text-lg font-black text-white mb-3">
+                    Excel Column Structure
+                  </h3>
+                  <p className="text-xs text-slate-400 mb-4 leading-relaxed">
+                    Make sure your Excel file includes the following header columns (Row 1):
+                  </p>
+
+                  <div className="space-y-2 text-xs">
+                    <div className="flex items-start gap-2 bg-slate-800/80 p-2.5 rounded-xl border border-slate-700">
+                      <span className="w-5 h-5 rounded-md bg-emerald-500/20 text-emerald-400 font-black text-[10px] flex items-center justify-center shrink-0">1</span>
+                      <div>
+                        <span className="font-bold text-white">Question:</span>
+                        <span className="text-slate-400 text-[11px] block">The complete MCQ question text.</span>
+                      </div>
+                    </div>
+
+                    <div className="flex items-start gap-2 bg-slate-800/80 p-2.5 rounded-xl border border-slate-700">
+                      <span className="w-5 h-5 rounded-md bg-emerald-500/20 text-emerald-400 font-black text-[10px] flex items-center justify-center shrink-0">2</span>
+                      <div>
+                        <span className="font-bold text-white">OptionA, OptionB, OptionC, OptionD:</span>
+                        <span className="text-slate-400 text-[11px] block">Four distinct answer choices.</span>
+                      </div>
+                    </div>
+
+                    <div className="flex items-start gap-2 bg-slate-800/80 p-2.5 rounded-xl border border-slate-700">
+                      <span className="w-5 h-5 rounded-md bg-emerald-500/20 text-emerald-400 font-black text-[10px] flex items-center justify-center shrink-0">3</span>
+                      <div>
+                        <span className="font-bold text-white">Correct (A/B/C/D):</span>
+                        <span className="text-slate-400 text-[11px] block">Correct option letter (e.g. A, B, C, or D).</span>
+                      </div>
+                    </div>
+
+                    <div className="flex items-start gap-2 bg-slate-800/80 p-2.5 rounded-xl border border-slate-700">
+                      <span className="w-5 h-5 rounded-md bg-emerald-500/20 text-emerald-400 font-black text-[10px] flex items-center justify-center shrink-0">4</span>
+                      <div>
+                        <span className="font-bold text-white">Explanation &amp; ImageUrl:</span>
+                        <span className="text-slate-400 text-[11px] block">Optional NCERT step-by-step solutions or diagram URLs.</span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <button
+                  onClick={handleDownloadSampleExcel}
+                  className="w-full py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs flex items-center justify-center gap-2 transition-colors cursor-pointer"
+                >
+                  <Download className="w-4 h-4" />
+                  <span>Download Sample Template</span>
+                </button>
+              </div>
+            </div>
+
+            {/* Test Metadata Settings & Save to Supabase (Visible when questions are parsed) */}
+            {parsedQuestions.length > 0 && (
+              <div className="bg-white rounded-3xl border border-slate-200 p-6 sm:p-8 shadow-xs space-y-6">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-100 pb-5">
+                  <div>
+                    <h3 className="text-lg font-black text-slate-900 flex items-center gap-2">
+                      <Database className="w-5 h-5 text-emerald-600" />
+                      Configure Test &amp; Publish to Supabase
+                    </h3>
+                    <p className="text-xs text-slate-500">
+                      Provide exam details before synchronizing all {parsedQuestions.length} questions into the cloud database.
+                    </p>
+                  </div>
+
+                  <button
+                    onClick={handleSaveAllToSupabase}
+                    disabled={isSavingBulkTest}
+                    className="px-6 py-3 rounded-2xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 active:scale-98 text-white font-extrabold text-sm shadow-md shadow-emerald-600/30 flex items-center justify-center gap-2 cursor-pointer transition-all disabled:opacity-50"
+                  >
+                    {isSavingBulkTest ? (
+                      <>
+                        <RefreshCw className="w-4 h-4 animate-spin" />
+                        <span>Saving to Supabase...</span>
+                      </>
+                    ) : (
+                      <>
+                        <Check className="w-4 h-4 stroke-[3]" />
+                        <span>Save All {parsedQuestions.length} Questions to Supabase</span>
+                      </>
+                    )}
+                  </button>
+                </div>
+
+                {/* Configuration Inputs */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
+                  <div className="sm:col-span-2">
+                    <label className="block text-xs font-bold text-slate-700 mb-1.5">
+                      Test Title *
+                    </label>
+                    <input
+                      type="text"
+                      value={bulkTestTitle}
+                      onChange={(e) => setBulkTestTitle(e.target.value)}
+                      placeholder="e.g. NEET Mock 1 (Cell Biology & Genetics)"
+                      className="w-full px-3.5 py-2.5 text-xs font-semibold bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-emerald-500 focus:outline-none"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 mb-1.5">
+                      Subject
+                    </label>
+                    <select
+                      value={bulkTestSubject}
+                      onChange={(e) => setBulkTestSubject(e.target.value)}
+                      className="w-full px-3.5 py-2.5 text-xs font-semibold bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-emerald-500 focus:outline-none"
+                    >
+                      <option value="Biology">Biology (Botany + Zoology)</option>
+                      <option value="Physics">Physics</option>
+                      <option value="Chemistry">Chemistry</option>
+                      <option value="Full Mock">Full NEET Mock (All Subjects)</option>
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 mb-1.5">
+                      Duration (Minutes)
+                    </label>
+                    <input
+                      type="number"
+                      min={5}
+                      max={240}
+                      value={bulkTestDuration}
+                      onChange={(e) => setBulkTestDuration(Number(e.target.value))}
+                      className="w-full px-3.5 py-2.5 text-xs font-semibold bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-emerald-500 focus:outline-none"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 mb-1.5">
+                      Difficulty Level
+                    </label>
+                    <select
+                      value={bulkTestDifficulty}
+                      onChange={(e) => setBulkTestDifficulty(e.target.value as any)}
+                      className="w-full px-3.5 py-2.5 text-xs font-semibold bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-emerald-500 focus:outline-none"
+                    >
+                      <option value="Easy">Easy (Foundation NCERT)</option>
+                      <option value="Medium">Medium (Standard NEET)</option>
+                      <option value="Hard">Hard (Rank Booster)</option>
+                    </select>
+                  </div>
+                </div>
+
+                {/* Question Preview Table */}
+                <div className="space-y-4 pt-4 border-t border-slate-100">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <h4 className="text-sm font-extrabold text-slate-900 flex items-center gap-2">
+                        <Table className="w-4 h-4 text-emerald-600" />
+                        Questions Preview Table ({showAllPreview ? parsedQuestions.length : Math.min(5, parsedQuestions.length)} of {parsedQuestions.length} Questions)
+                      </h4>
+                      <p className="text-xs text-slate-500">
+                        Verify mapped options and highlighted correct answers before cloud insertion.
+                      </p>
+                    </div>
+
+                    {parsedQuestions.length > 5 && (
+                      <button
+                        onClick={() => setShowAllPreview(!showAllPreview)}
+                        className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-800 rounded-xl text-xs font-bold transition-colors cursor-pointer"
+                      >
+                        {showAllPreview ? "Show First 5 Questions Only" : `Show All ${parsedQuestions.length} Questions`}
+                      </button>
+                    )}
+                  </div>
+
+                  <div className="overflow-x-auto rounded-2xl border border-slate-200 shadow-xs">
+                    <table className="w-full text-left border-collapse text-xs">
+                      <thead>
+                        <tr className="bg-slate-100/80 text-slate-700 border-b border-slate-200 font-extrabold">
+                          <th className="py-3 px-3.5 w-12 text-center">#</th>
+                          <th className="py-3 px-4 min-w-[280px]">Question</th>
+                          <th className="py-3 px-3 min-w-[140px]">Option A</th>
+                          <th className="py-3 px-3 min-w-[140px]">Option B</th>
+                          <th className="py-3 px-3 min-w-[140px]">Option C</th>
+                          <th className="py-3 px-3 min-w-[140px]">Option D</th>
+                          <th className="py-3 px-3 min-w-[120px]">Correct Answer</th>
+                          <th className="py-3 px-4 min-w-[200px]">Explanation</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100">
+                        {(showAllPreview ? parsedQuestions : parsedQuestions.slice(0, 5)).map((q, idx) => (
+                          <tr key={q.id || idx} className="hover:bg-slate-50 transition-colors">
+                            <td className="py-3 px-3.5 font-bold text-slate-500 text-center bg-slate-50/50">
+                              {idx + 1}
+                            </td>
+                            <td className="py-3 px-4 font-semibold text-slate-900">
+                              <p className="leading-relaxed">{q.question}</p>
+                              {q.imageUrl && (
+                                <div className="mt-1.5 flex items-center gap-1.5 text-[11px] text-sky-600">
+                                  <span>🖼️ Image Attachment:</span>
+                                  <a href={q.imageUrl} target="_blank" rel="noreferrer" className="underline truncate max-w-[180px]">
+                                    {q.imageUrl}
+                                  </a>
+                                </div>
+                              )}
+                            </td>
+                            <td className={`py-3 px-3 ${q.correctAnswer === 0 ? 'bg-emerald-50 text-emerald-950 font-bold' : 'text-slate-600'}`}>
+                              <span className="font-extrabold text-slate-400 mr-1">(A)</span>
+                              {q.options?.[0]}
+                            </td>
+                            <td className={`py-3 px-3 ${q.correctAnswer === 1 ? 'bg-emerald-50 text-emerald-950 font-bold' : 'text-slate-600'}`}>
+                              <span className="font-extrabold text-slate-400 mr-1">(B)</span>
+                              {q.options?.[1]}
+                            </td>
+                            <td className={`py-3 px-3 ${q.correctAnswer === 2 ? 'bg-emerald-50 text-emerald-950 font-bold' : 'text-slate-600'}`}>
+                              <span className="font-extrabold text-slate-400 mr-1">(C)</span>
+                              {q.options?.[2]}
+                            </td>
+                            <td className={`py-3 px-3 ${q.correctAnswer === 3 ? 'bg-emerald-50 text-emerald-950 font-bold' : 'text-slate-600'}`}>
+                              <span className="font-extrabold text-slate-400 mr-1">(D)</span>
+                              {q.options?.[3]}
+                            </td>
+                            <td className="py-3 px-3">
+                              <span className="inline-flex items-center gap-1 px-2.5 py-1 bg-emerald-100 border border-emerald-300 text-emerald-900 rounded-lg font-black text-xs">
+                                <Check className="w-3 h-3 text-emerald-700 stroke-[3]" />
+                                Option {q.correctAnswerLetter || ['A', 'B', 'C', 'D'][q.correctAnswer]}
+                              </span>
+                            </td>
+                            <td className="py-3 px-4 text-slate-600 text-[11px] leading-relaxed">
+                              {q.explanation || '—'}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+
+                {/* Final Action Button */}
+                <div className="pt-4 flex flex-col sm:flex-row items-center justify-end gap-3">
+                  <button
+                    onClick={() => {
+                      setParsedQuestions([]);
+                      setBulkTestTitle('');
+                      if (fileInputRef.current) fileInputRef.current.value = '';
+                    }}
+                    className="w-full sm:w-auto px-5 py-2.5 rounded-xl border border-slate-200 hover:bg-slate-100 text-slate-700 font-bold text-xs cursor-pointer transition-colors"
+                  >
+                    Discard &amp; Upload Another
+                  </button>
+
+                  <button
+                    onClick={handleSaveAllToSupabase}
+                    disabled={isSavingBulkTest}
+                    className="w-full sm:w-auto px-6 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-xs flex items-center justify-center gap-2 cursor-pointer shadow-md shadow-emerald-600/20 transition-all disabled:opacity-50"
+                  >
+                    {isSavingBulkTest ? (
+                      <>
+                        <RefreshCw className="w-4 h-4 animate-spin" />
+                        <span>Saving Questions to Supabase...</span>
+                      </>
+                    ) : (
+                      <>
+                        <Check className="w-4 h-4 stroke-[3]" />
+                        <span>Save All to Supabase</span>
+                      </>
+                    )}
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
         )}
 
