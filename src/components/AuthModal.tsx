@@ -291,3 +291,5 @@ export const AuthModal: React.FC<AuthModalProps> = ({
     </div>
   );
 };
+
+export default AuthModal;

@@ -1,6 +1,5 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import katex from 'katex';
-import confetti from 'canvas-confetti';
 import { 
   Clock, 
   CheckCircle2, 

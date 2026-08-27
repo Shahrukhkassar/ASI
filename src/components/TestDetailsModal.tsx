@@ -117,3 +117,5 @@ export const TestDetailsModal: React.FC<TestDetailsModalProps> = ({
     </div>
   );
 };
+
+export default TestDetailsModal;

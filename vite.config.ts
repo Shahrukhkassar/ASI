@@ -38,6 +38,12 @@ export default defineConfig({
             if (id.includes('canvas-confetti')) {
               return 'vendor-confetti';
             }
+            if (id.includes('pdfjs-dist')) {
+              return 'vendor-pdfjs';
+            }
+            if (id.includes('firebase')) {
+              return 'vendor-firebase';
+            }
             return 'vendor-misc';
           }
         }

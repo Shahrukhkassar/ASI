@@ -270,3 +270,5 @@ export const TeacherLoginPage: React.FC<TeacherLoginPageProps> = ({
     </div>
   );
 };
+
+export default TeacherLoginPage;
