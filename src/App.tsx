@@ -1,27 +1,45 @@
-import React, { useState, useEffect } from 'react';
-import { BookOpen, Flame, ShieldAlert, Smartphone } from 'lucide-react';
+import React, { useState, useEffect, Suspense, lazy } from 'react';
+import { BookOpen, Flame, ShieldAlert, Smartphone, RefreshCw } from 'lucide-react';
 import { DeviceProvider, useDeviceContext } from './context/DeviceContext';
 import { Layout } from './components/Layout';
-import { Navbar } from './components/Navbar';
 import { Hero } from './components/Hero';
 import { TestCard } from './components/TestCard';
 import { TestFilter } from './components/TestFilter';
 import { Features } from './components/Features';
 import { AboutSection } from './components/AboutSection';
 import { Footer } from './components/Footer';
-import { TestSimulatorModal } from './components/TestSimulatorModal';
-import { TestDetailsModal } from './components/TestDetailsModal';
-import { AuthModal } from './components/AuthModal';
-import { StudentDashboard } from './components/StudentDashboard';
-import { AdminDashboard } from './components/AdminDashboard';
-import { TeacherLoginPage } from './components/TeacherLoginPage';
 import { ToastProvider } from './components/Toast';
 import { HomeNotificationBanner } from './components/NotificationCenter';
 import { PwaInstallButton } from './components/PwaInstallButton';
+import { ProtectedRoute } from './components/ProtectedRoute';
+import { useBackButton, pushHistoryTrap } from './hooks/useBackButton';
 
 import { MOCK_TESTS } from './data/mockTests';
 import { TestItem, TestCategory, Difficulty, UserProfile } from './types';
 import { subscribeToRealtimeTests, fetchAllTests } from './utils/supabaseClient';
+
+// Lazy load heavy components and sub-dashboards for fast APK cold start & bundle optimization
+const StudentDashboard = lazy(() => import('./components/StudentDashboard'));
+const AdminDashboard = lazy(() => import('./components/AdminDashboard'));
+const TeacherLoginPage = lazy(() => import('./components/TeacherLoginPage'));
+const TestSimulatorModal = lazy(() => import('./components/TestSimulatorModal'));
+const TestDetailsModal = lazy(() => import('./components/TestDetailsModal'));
+const AuthModal = lazy(() => import('./components/AuthModal'));
+
+/**
+ * Lightweight Route Loading Skeleton
+ */
+const RouteLoadingFallback = () => (
+  <div className="min-h-[70vh] flex flex-col items-center justify-center p-6 text-center space-y-4">
+    <div className="w-12 h-12 rounded-2xl bg-violet-600/20 border border-violet-500/30 flex items-center justify-center text-violet-400">
+      <RefreshCw className="w-6 h-6 animate-spin" />
+    </div>
+    <div className="space-y-1">
+      <p className="text-sm font-bold text-white">Loading ASI Platform...</p>
+      <p className="text-xs text-slate-400">Optimizing resources for your device</p>
+    </div>
+  </div>
+);
 
 function MainAppContent() {
   const { isMobile, isPWA } = useDeviceContext();
@@ -95,9 +113,31 @@ function MainAppContent() {
     return 'home';
   });
 
+  // Modals state
+  const [authModalOpen, setAuthModalOpen] = useState(false);
+  const [authMode, setAuthMode] = useState<'login' | 'signup'>('login');
+  const [activeTestForTaking, setActiveTestForTaking] = useState<TestItem | null>(null);
+  const [activeTestForDetails, setActiveTestForDetails] = useState<TestItem | null>(null);
+
+  // Hardware Back Button Handlers for App-level modals
+  useBackButton(() => {
+    if (activeTestForDetails) {
+      setActiveTestForDetails(null);
+      return true;
+    }
+    return false;
+  }, !!activeTestForDetails, 25);
+
+  useBackButton(() => {
+    if (authModalOpen) {
+      setAuthModalOpen(false);
+      return true;
+    }
+    return false;
+  }, authModalOpen, 24);
+
   // Ensure viewport meta and theme-color for PWA & mobile
   useEffect(() => {
-    // Theme color meta tag
     let themeMeta = document.querySelector('meta[name="theme-color"]');
     if (!themeMeta) {
       themeMeta = document.createElement('meta');
@@ -106,7 +146,6 @@ function MainAppContent() {
     }
     themeMeta.setAttribute('content', '#020617');
 
-    // Apple touch mobile web app
     let appleMeta = document.querySelector('meta[name="apple-mobile-web-app-capable"]');
     if (!appleMeta) {
       appleMeta = document.createElement('meta');
@@ -206,10 +245,6 @@ function MainAppContent() {
     };
   }, []);
 
-  // Auth modal state for students
-  const [authModalOpen, setAuthModalOpen] = useState(false);
-  const [authMode, setAuthMode] = useState<'login' | 'signup'>('login');
-
   // Test filter states
   const categories: TestCategory[] = [
     'All',
@@ -222,10 +257,6 @@ function MainAppContent() {
   const [selectedCategory, setSelectedCategory] = useState<TestCategory>('All');
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [selectedDifficulty, setSelectedDifficulty] = useState<'All' | Difficulty>('All');
-
-  // Active Modals for Test taking & details
-  const [activeTestForTaking, setActiveTestForTaking] = useState<TestItem | null>(null);
-  const [activeTestForDetails, setActiveTestForDetails] = useState<TestItem | null>(null);
 
   // Navigation scroll handler
   const handleNavigate = (sectionId: string) => {
@@ -298,169 +329,145 @@ function MainAppContent() {
     return true;
   });
 
-  // ================= ROUTE 1: ADMIN PANEL =================
+  // ================= ROUTE 1: ADMIN PANEL (PROTECTED) =================
   if (currentRoute === 'admin') {
-    if (adminUser && adminUser.isLoggedIn) {
-      return (
-        <Layout
-          user={studentUser}
-          adminUser={adminUser}
-          currentRoute={currentRoute}
-          activeSection={activeSection}
-          onNavigate={handleNavigate}
-          onOpenAuth={handleOpenAuth}
-          onLogout={handleStudentLogout}
-          onAdminLogout={handleAdminLogout}
-          onOpenStudentDashboard={() => {
-            window.location.hash = '#student-dashboard';
-            setCurrentRoute('student-dashboard');
-          }}
-          onOpenAdminDashboard={() => {
-            window.location.hash = '#admin';
-            setCurrentRoute('admin');
-          }}
-          onOpenTeacherLogin={() => {
-            window.location.hash = '#admin';
-            setCurrentRoute('admin');
-          }}
-          onStartQuickMock={() => setActiveTestForTaking(MOCK_TESTS[0])}
-        >
-          <AdminDashboard
-            user={adminUser}
-            tests={allTests}
-            onLogout={handleAdminLogout}
-            onGoHome={() => {
-              window.location.hash = '#';
-              setCurrentRoute('home');
-            }}
-            onPreviewTest={(test) => setActiveTestForTaking(test)}
-            onUpdateTests={(updated) => setAllTests(updated)}
-          />
-          {activeTestForTaking && (
-            <TestSimulatorModal
-              test={activeTestForTaking}
-              onClose={() => setActiveTestForTaking(null)}
-            />
-          )}
-        </Layout>
-      );
-    }
-
     return (
-      <TeacherLoginPage
-        onLoginSuccess={handleAdminLoginSuccess}
-        onGoHome={() => {
-          window.location.hash = '#';
-          setCurrentRoute('home');
+      <ProtectedRoute
+        requiredRole="admin"
+        currentUser={adminUser}
+        onUnauthorized={() => {
+          // Stay on admin hash so TeacherLoginPage shows
         }}
-      />
-    );
-  }
-
-  // ================= ROUTE 2: STUDENT DASHBOARD =================
-  if (currentRoute === 'student-dashboard') {
-    if (studentUser && studentUser.isLoggedIn) {
-      return (
-        <Layout
-          user={studentUser}
-          adminUser={adminUser}
-          currentRoute={currentRoute}
-          activeSection={activeSection}
-          onNavigate={handleNavigate}
-          onOpenAuth={handleOpenAuth}
-          onLogout={handleStudentLogout}
-          onAdminLogout={handleAdminLogout}
-          onOpenStudentDashboard={() => {
-            window.location.hash = '#student-dashboard';
-            setCurrentRoute('student-dashboard');
-          }}
-          onOpenAdminDashboard={() => {
-            window.location.hash = '#admin';
-            setCurrentRoute('admin');
-          }}
-          onOpenTeacherLogin={() => {
-            window.location.hash = '#admin';
-            setCurrentRoute('admin');
-          }}
-          onStartQuickMock={() => setActiveTestForTaking(MOCK_TESTS[0])}
-        >
-          <StudentDashboard
-            user={studentUser}
-            tests={allTests}
-            onStartTest={(test) => setActiveTestForTaking(test)}
-            onViewDetails={(test) => setActiveTestForDetails(test)}
-            onLogout={handleStudentLogout}
-            onGoHome={() => {
-              window.location.hash = '#';
-              setCurrentRoute('home');
-            }}
-            onUpdateProfile={(updated) => {
-              if (studentUser) {
-                handleSetStudentUser({ ...studentUser, ...updated });
-              }
-            }}
-          />
-          {activeTestForTaking && (
-            <TestSimulatorModal
-              test={activeTestForTaking}
-              onClose={() => setActiveTestForTaking(null)}
-            />
-          )}
-          {activeTestForDetails && (
-            <TestDetailsModal
-              test={activeTestForDetails}
-              onClose={() => setActiveTestForDetails(null)}
-              onStartTest={(t) => {
-                setActiveTestForDetails(null);
-                setActiveTestForTaking(t);
+      >
+        <Suspense fallback={<RouteLoadingFallback />}>
+          {adminUser && adminUser.isLoggedIn ? (
+            <Layout
+              user={studentUser}
+              adminUser={adminUser}
+              currentRoute={currentRoute}
+              activeSection={activeSection}
+              onNavigate={handleNavigate}
+              onOpenAuth={handleOpenAuth}
+              onLogout={handleStudentLogout}
+              onAdminLogout={handleAdminLogout}
+              onOpenStudentDashboard={() => {
+                window.location.hash = '#student-dashboard';
+                setCurrentRoute('student-dashboard');
               }}
-            />
-          )}
-        </Layout>
-      );
-    }
-
-    return (
-      <div className="min-h-screen bg-slate-950 text-white flex flex-col items-center justify-center p-4">
-        <div className="bg-slate-900 p-8 rounded-3xl max-w-md w-full text-center space-y-4 border border-violet-500/30 shadow-2xl">
-          <div className="w-14 h-14 rounded-2xl bg-violet-600 flex items-center justify-center mx-auto text-white shadow-lg">
-            <BookOpen className="w-7 h-7" />
-          </div>
-          <h2 className="text-xl font-bold text-white">Student Login Required</h2>
-          <p className="text-sm text-slate-300">
-            Please log in with your Student account to access your practice history, test scores, and analytics.
-          </p>
-          <div className="flex flex-col gap-2 pt-2">
-            <button
-              onClick={() => {
-                setAuthMode('login');
-                setAuthModalOpen(true);
+              onOpenAdminDashboard={() => {
+                window.location.hash = '#admin';
+                setCurrentRoute('admin');
               }}
-              className="w-full py-3 bg-violet-600 hover:bg-violet-700 text-white text-sm font-bold rounded-xl shadow-md cursor-pointer"
+              onOpenTeacherLogin={() => {
+                window.location.hash = '#admin';
+                setCurrentRoute('admin');
+              }}
+              onStartQuickMock={() => setActiveTestForTaking(MOCK_TESTS[0])}
             >
-              Log In Student Account
-            </button>
-            <button
-              onClick={() => {
+              <AdminDashboard
+                user={adminUser}
+                tests={allTests}
+                onLogout={handleAdminLogout}
+                onGoHome={() => {
+                  window.location.hash = '#';
+                  setCurrentRoute('home');
+                }}
+                onPreviewTest={(test) => setActiveTestForTaking(test)}
+                onUpdateTests={(updated) => setAllTests(updated)}
+              />
+              {activeTestForTaking && (
+                <TestSimulatorModal
+                  test={activeTestForTaking}
+                  onClose={() => setActiveTestForTaking(null)}
+                />
+              )}
+            </Layout>
+          ) : (
+            <TeacherLoginPage
+              onLoginSuccess={handleAdminLoginSuccess}
+              onGoHome={() => {
                 window.location.hash = '#';
                 setCurrentRoute('home');
               }}
-              className="w-full py-2.5 text-xs font-semibold text-slate-400 hover:text-white"
-            >
-              &larr; Back to Home Page
-            </button>
-          </div>
-        </div>
+            />
+          )}
+        </Suspense>
+      </ProtectedRoute>
+    );
+  }
 
-        {authModalOpen && (
-          <AuthModal
-            isOpen={authModalOpen}
-            initialMode={authMode}
-            onClose={() => setAuthModalOpen(false)}
-            onLoginSuccess={handleLoginSuccess}
-          />
-        )}
-      </div>
+  // ================= ROUTE 2: STUDENT DASHBOARD (PROTECTED) =================
+  if (currentRoute === 'student-dashboard') {
+    return (
+      <ProtectedRoute
+        requiredRole="student"
+        currentUser={studentUser}
+        onUnauthorized={() => {
+          handleOpenAuth('login');
+        }}
+      >
+        <Suspense fallback={<RouteLoadingFallback />}>
+          <Layout
+            user={studentUser}
+            adminUser={adminUser}
+            currentRoute={currentRoute}
+            activeSection={activeSection}
+            onNavigate={handleNavigate}
+            onOpenAuth={handleOpenAuth}
+            onLogout={handleStudentLogout}
+            onAdminLogout={handleAdminLogout}
+            onOpenStudentDashboard={() => {
+              window.location.hash = '#student-dashboard';
+              setCurrentRoute('student-dashboard');
+            }}
+            onOpenAdminDashboard={() => {
+              window.location.hash = '#admin';
+              setCurrentRoute('admin');
+            }}
+            onOpenTeacherLogin={() => {
+              window.location.hash = '#admin';
+              setCurrentRoute('admin');
+            }}
+            onStartQuickMock={() => setActiveTestForTaking(MOCK_TESTS[0])}
+          >
+            {studentUser && (
+              <StudentDashboard
+                user={studentUser}
+                tests={allTests}
+                onStartTest={(test) => setActiveTestForTaking(test)}
+                onViewDetails={(test) => setActiveTestForDetails(test)}
+                onLogout={handleStudentLogout}
+                onGoHome={() => {
+                  window.location.hash = '#';
+                  setCurrentRoute('home');
+                }}
+                onUpdateProfile={(updated) => {
+                  if (studentUser) {
+                    handleSetStudentUser({ ...studentUser, ...updated });
+                  }
+                }}
+              />
+            )}
+            {activeTestForTaking && (
+              <TestSimulatorModal
+                test={activeTestForTaking}
+                user={studentUser}
+                onClose={() => setActiveTestForTaking(null)}
+              />
+            )}
+            {activeTestForDetails && (
+              <TestDetailsModal
+                test={activeTestForDetails}
+                onClose={() => setActiveTestForDetails(null)}
+                onStartTest={(t) => {
+                  setActiveTestForDetails(null);
+                  setActiveTestForTaking(t);
+                }}
+              />
+            )}
+          </Layout>
+        </Suspense>
+      </ProtectedRoute>
     );
   }
 
@@ -612,34 +619,36 @@ function MainAppContent() {
       {/* Floating Bottom PWA Install Banner (Mobile) */}
       <PwaInstallButton variant="floating" />
 
-      {/* Interactive Modals */}
-      {activeTestForTaking && (
-        <TestSimulatorModal
-          test={activeTestForTaking}
-          user={studentUser}
-          onClose={() => setActiveTestForTaking(null)}
-        />
-      )}
+      {/* Interactive Modals (Lazy Loaded) */}
+      <Suspense fallback={null}>
+        {activeTestForTaking && (
+          <TestSimulatorModal
+            test={activeTestForTaking}
+            user={studentUser}
+            onClose={() => setActiveTestForTaking(null)}
+          />
+        )}
 
-      {activeTestForDetails && (
-        <TestDetailsModal
-          test={activeTestForDetails}
-          onClose={() => setActiveTestForDetails(null)}
-          onStartTest={(t) => {
-            setActiveTestForDetails(null);
-            setActiveTestForTaking(t);
-          }}
-        />
-      )}
+        {activeTestForDetails && (
+          <TestDetailsModal
+            test={activeTestForDetails}
+            onClose={() => setActiveTestForDetails(null)}
+            onStartTest={(t) => {
+              setActiveTestForDetails(null);
+              setActiveTestForTaking(t);
+            }}
+          />
+        )}
 
-      {authModalOpen && (
-        <AuthModal
-          isOpen={authModalOpen}
-          initialMode={authMode}
-          onClose={() => setAuthModalOpen(false)}
-          onLoginSuccess={handleLoginSuccess}
-        />
-      )}
+        {authModalOpen && (
+          <AuthModal
+            isOpen={authModalOpen}
+            initialMode={authMode}
+            onClose={() => setAuthModalOpen(false)}
+            onLoginSuccess={handleLoginSuccess}
+          />
+        )}
+      </Suspense>
     </Layout>
   );
 }

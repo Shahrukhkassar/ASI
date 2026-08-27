@@ -25,6 +25,7 @@ import {
 import { useDeviceContext } from '../context/DeviceContext';
 import { UserProfile } from '../types';
 import { NotificationCenter } from './NotificationCenter';
+import { useBackButton, pushHistoryTrap } from '../hooks/useBackButton';
 
 export interface LayoutProps {
   children: ReactNode;
@@ -64,6 +65,7 @@ export const Layout: React.FC<LayoutProps> = ({
 
   // Sync mobile tab state with current route
   useEffect(() => {
+    pushHistoryTrap(`asi_${currentRoute}`);
     if (currentRoute === 'student-dashboard') {
       setActiveMobileTab('profile');
     } else if (currentRoute === 'admin') {
@@ -76,6 +78,15 @@ export const Layout: React.FC<LayoutProps> = ({
       }
     }
   }, [currentRoute, activeSection]);
+
+  // Back button handling in Layout: navigate back to Home if in Sub-Dashboard
+  useBackButton(() => {
+    if (currentRoute !== 'home') {
+      onNavigate('hero');
+      return true;
+    }
+    return false;
+  }, currentRoute !== 'home', 5);
 
   // Haptic feedback for native mobile touches
   const triggerHaptic = (duration = 10) => {

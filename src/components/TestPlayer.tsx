@@ -47,6 +47,8 @@ import { supabase, saveStudentResult } from '../utils/supabaseClient';
 import { MOCK_TESTS } from '../data/mockTests';
 import { AIDoubtSolver } from './AIDoubtSolver';
 import { QuestionRenderer } from './QuestionRenderer';
+import { useBackButton } from '../hooks/useBackButton';
+import { triggerOptimizedConfetti, getOptimizedBackdropClass } from '../utils/performance';
 
 // Props Interface
 export interface TestPlayerProps {
@@ -199,8 +201,52 @@ export const TestPlayer: React.FC<TestPlayerProps> = ({
 
   // Submit confirmation modal & results
   const [showSubmitModal, setShowSubmitModal] = useState<boolean>(false);
+  const [showExitConfirmModal, setShowExitConfirmModal] = useState<boolean>(false);
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
   const [testResult, setTestResult] = useState<TestResult | null>(null);
+
+  // Hardware Back Button Interception (LIFO Stack handling for PWA/APK)
+  useBackButton(() => {
+    if (zoomedImageUrl) {
+      setZoomedImageUrl(null);
+      return true;
+    }
+    return false;
+  }, !!zoomedImageUrl, 30);
+
+  useBackButton(() => {
+    if (isMobilePaletteOpen) {
+      setIsMobilePaletteOpen(false);
+      return true;
+    }
+    return false;
+  }, isMobilePaletteOpen, 25);
+
+  useBackButton(() => {
+    if (showSubmitModal) {
+      setShowSubmitModal(false);
+      return true;
+    }
+    return false;
+  }, showSubmitModal, 22);
+
+  useBackButton(() => {
+    if (showExitConfirmModal) {
+      setShowExitConfirmModal(false);
+      return true;
+    }
+    return false;
+  }, showExitConfirmModal, 20);
+
+  // Overall Test Player hardware back button handler: prompt before accidental exit
+  useBackButton(() => {
+    if (!testResult) {
+      setShowExitConfirmModal(true);
+      return true;
+    }
+    onClose();
+    return true;
+  }, true, 10);
 
   // Filter subject/section tabs if multi-subject
   const subjectTabs = useMemo(() => {
@@ -495,15 +541,10 @@ export const TestPlayer: React.FC<TestPlayerProps> = ({
     setIsSubmitting(false);
 
     // Trigger celebration confetti
-    try {
-      confetti({
-        particleCount: 120,
-        spread: 70,
-        origin: { y: 0.6 }
-      });
-    } catch {
-      // ignore
-    }
+    triggerOptimizedConfetti({
+      spread: 70,
+      origin: { y: 0.6 }
+    });
 
     if (onFinish) {
       onFinish(finalResult);
@@ -1099,7 +1140,7 @@ export const TestPlayer: React.FC<TestPlayerProps> = ({
       {zoomedImageUrl && (
         <div 
           onClick={() => setZoomedImageUrl(null)}
-          className="fixed inset-0 z-50 bg-slate-950/95 backdrop-blur-md flex items-center justify-center p-4 cursor-zoom-out"
+          className={`fixed inset-0 z-50 bg-slate-950/95 ${getOptimizedBackdropClass()} flex items-center justify-center p-4 cursor-zoom-out`}
         >
           <div className="relative max-w-4xl max-h-[90vh] bg-slate-900 p-3 rounded-3xl border border-slate-800 shadow-2xl">
             <button
@@ -1113,6 +1154,47 @@ export const TestPlayer: React.FC<TestPlayerProps> = ({
               alt="Zoomed Diagram"
               className="max-h-[82vh] w-auto rounded-2xl object-contain"
             />
+          </div>
+        </div>
+      )}
+
+      {/* ========================================================================= */}
+      {/* MODAL 4: BACK BUTTON / EXIT TEST CONFIRMATION MODAL */}
+      {/* ========================================================================= */}
+      {showExitConfirmModal && !testResult && (
+        <div className={`fixed inset-0 z-50 bg-slate-950/85 ${getOptimizedBackdropClass()} flex items-center justify-center p-4 animate-in fade-in`}>
+          <div className="bg-slate-900 border border-slate-800 rounded-3xl max-w-md w-full p-6 text-white shadow-2xl space-y-4 animate-in zoom-in-95">
+            <div className="flex items-center gap-3">
+              <div className="w-12 h-12 rounded-2xl bg-amber-500/20 text-amber-400 flex items-center justify-center shrink-0">
+                <AlertCircle className="w-6 h-6 text-amber-400" />
+              </div>
+              <div>
+                <h3 className="text-base font-black text-white">Exit Test In Progress?</h3>
+                <p className="text-xs text-slate-400">Exam timer is still running</p>
+              </div>
+            </div>
+
+            <p className="text-xs text-slate-300 leading-relaxed bg-slate-950 p-3.5 rounded-2xl border border-slate-800/80">
+              Are you sure you want to leave this exam? Your current answers are saved locally, but leaving the exam screen may count as a tab switch attempt.
+            </p>
+
+            <div className="flex items-center justify-end gap-2.5 pt-2">
+              <button
+                onClick={() => setShowExitConfirmModal(false)}
+                className="px-4 py-2.5 rounded-xl bg-violet-600 hover:bg-violet-700 text-white font-black text-xs cursor-pointer transition-all shadow-md shadow-violet-600/30"
+              >
+                Continue Exam
+              </button>
+              <button
+                onClick={() => {
+                  setShowExitConfirmModal(false);
+                  onClose();
+                }}
+                className="px-4 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-rose-400 font-bold text-xs cursor-pointer transition-colors"
+              >
+                Exit to Dashboard
+              </button>
+            </div>
           </div>
         </div>
       )}
