@@ -1,5 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { BookOpen, Flame, ShieldAlert, Smartphone } from 'lucide-react';
+import { DeviceProvider, useDeviceContext } from './context/DeviceContext';
+import { Layout } from './components/Layout';
 import { Navbar } from './components/Navbar';
 import { Hero } from './components/Hero';
 import { TestCard } from './components/TestCard';
@@ -22,6 +24,8 @@ import { TestItem, TestCategory, Difficulty, UserProfile } from './types';
 import { subscribeToRealtimeTests, fetchAllTests } from './utils/supabaseClient';
 
 function MainAppContent() {
+  const { isMobile, isPWA } = useDeviceContext();
+
   // Navigation active section tracking
   const [activeSection, setActiveSection] = useState<string>('hero');
 
@@ -76,7 +80,7 @@ function MainAppContent() {
     return null;
   });
 
-  // Current Route: 'home' | 'student-dashboard' | 'admin' | 'teacher-login'
+  // Current Route: 'home' | 'student-dashboard' | 'admin'
   const [currentRoute, setCurrentRoute] = useState<'home' | 'student-dashboard' | 'admin'>(() => {
     if (typeof window !== 'undefined') {
       const hash = window.location.hash;
@@ -90,6 +94,27 @@ function MainAppContent() {
     }
     return 'home';
   });
+
+  // Ensure viewport meta and theme-color for PWA & mobile
+  useEffect(() => {
+    // Theme color meta tag
+    let themeMeta = document.querySelector('meta[name="theme-color"]');
+    if (!themeMeta) {
+      themeMeta = document.createElement('meta');
+      themeMeta.setAttribute('name', 'theme-color');
+      document.head.appendChild(themeMeta);
+    }
+    themeMeta.setAttribute('content', '#020617');
+
+    // Apple touch mobile web app
+    let appleMeta = document.querySelector('meta[name="apple-mobile-web-app-capable"]');
+    if (!appleMeta) {
+      appleMeta = document.createElement('meta');
+      appleMeta.setAttribute('name', 'apple-mobile-web-app-capable');
+      appleMeta.setAttribute('content', 'yes');
+      document.head.appendChild(appleMeta);
+    }
+  }, []);
 
   // Listen to browser hash changes for seamless client routing
   useEffect(() => {
@@ -135,7 +160,7 @@ function MainAppContent() {
     }
   };
 
-  // Test pool state (Default mock tests + custom published tests from Supabase)
+  // Test pool state
   const [allTests, setAllTests] = useState<TestItem[]>(() => {
     try {
       const saved = localStorage.getItem('asi_custom_tests');
@@ -275,10 +300,31 @@ function MainAppContent() {
 
   // ================= ROUTE 1: ADMIN PANEL =================
   if (currentRoute === 'admin') {
-    // If admin is verified and logged in -> Render Admin Dashboard
     if (adminUser && adminUser.isLoggedIn) {
       return (
-        <>
+        <Layout
+          user={studentUser}
+          adminUser={adminUser}
+          currentRoute={currentRoute}
+          activeSection={activeSection}
+          onNavigate={handleNavigate}
+          onOpenAuth={handleOpenAuth}
+          onLogout={handleStudentLogout}
+          onAdminLogout={handleAdminLogout}
+          onOpenStudentDashboard={() => {
+            window.location.hash = '#student-dashboard';
+            setCurrentRoute('student-dashboard');
+          }}
+          onOpenAdminDashboard={() => {
+            window.location.hash = '#admin';
+            setCurrentRoute('admin');
+          }}
+          onOpenTeacherLogin={() => {
+            window.location.hash = '#admin';
+            setCurrentRoute('admin');
+          }}
+          onStartQuickMock={() => setActiveTestForTaking(MOCK_TESTS[0])}
+        >
           <AdminDashboard
             user={adminUser}
             tests={allTests}
@@ -296,11 +342,10 @@ function MainAppContent() {
               onClose={() => setActiveTestForTaking(null)}
             />
           )}
-        </>
+        </Layout>
       );
     }
 
-    // Otherwise render secure Teacher/Admin Login Page
     return (
       <TeacherLoginPage
         onLoginSuccess={handleAdminLoginSuccess}
@@ -316,7 +361,29 @@ function MainAppContent() {
   if (currentRoute === 'student-dashboard') {
     if (studentUser && studentUser.isLoggedIn) {
       return (
-        <>
+        <Layout
+          user={studentUser}
+          adminUser={adminUser}
+          currentRoute={currentRoute}
+          activeSection={activeSection}
+          onNavigate={handleNavigate}
+          onOpenAuth={handleOpenAuth}
+          onLogout={handleStudentLogout}
+          onAdminLogout={handleAdminLogout}
+          onOpenStudentDashboard={() => {
+            window.location.hash = '#student-dashboard';
+            setCurrentRoute('student-dashboard');
+          }}
+          onOpenAdminDashboard={() => {
+            window.location.hash = '#admin';
+            setCurrentRoute('admin');
+          }}
+          onOpenTeacherLogin={() => {
+            window.location.hash = '#admin';
+            setCurrentRoute('admin');
+          }}
+          onStartQuickMock={() => setActiveTestForTaking(MOCK_TESTS[0])}
+        >
           <StudentDashboard
             user={studentUser}
             tests={allTests}
@@ -349,14 +416,13 @@ function MainAppContent() {
               }}
             />
           )}
-        </>
+        </Layout>
       );
     }
 
-    // If student not logged in, prompt Auth modal and show home
     return (
-      <div className="min-h-screen bg-slate-900 text-white flex flex-col items-center justify-center p-4">
-        <div className="bg-slate-800 p-8 rounded-3xl max-w-md w-full text-center space-y-4 border border-violet-500/30 shadow-2xl">
+      <div className="min-h-screen bg-slate-950 text-white flex flex-col items-center justify-center p-4">
+        <div className="bg-slate-900 p-8 rounded-3xl max-w-md w-full text-center space-y-4 border border-violet-500/30 shadow-2xl">
           <div className="w-14 h-14 rounded-2xl bg-violet-600 flex items-center justify-center mx-auto text-white shadow-lg">
             <BookOpen className="w-7 h-7" />
           </div>
@@ -398,170 +464,163 @@ function MainAppContent() {
     );
   }
 
-  // ================= ROUTE 3: PUBLIC HOME VIEW =================
+  // ================= ROUTE 3: PUBLIC HOME VIEW (ADAPTIVE LAYOUT) =================
   return (
-    <div className="min-h-screen bg-slate-50 text-slate-900 font-sans selection:bg-violet-200 selection:text-violet-900 flex flex-col">
-      
-      {/* 1. Real-time Notification Banner on Top of Home */}
+    <Layout
+      user={studentUser}
+      adminUser={adminUser}
+      currentRoute={currentRoute}
+      activeSection={activeSection}
+      onNavigate={handleNavigate}
+      onOpenAuth={handleOpenAuth}
+      onLogout={handleStudentLogout}
+      onAdminLogout={handleAdminLogout}
+      onOpenStudentDashboard={() => {
+        window.location.hash = '#student-dashboard';
+        setCurrentRoute('student-dashboard');
+      }}
+      onOpenAdminDashboard={() => {
+        window.location.hash = '#admin';
+        setCurrentRoute('admin');
+      }}
+      onOpenTeacherLogin={() => {
+        window.location.hash = '#admin';
+        setCurrentRoute('admin');
+      }}
+      onStartQuickMock={() => setActiveTestForTaking(MOCK_TESTS[0])}
+    >
+      {/* 1. Real-time Notification Banner on Top */}
       <HomeNotificationBanner
         onStartTestNow={() => setActiveTestForTaking(MOCK_TESTS[0])}
         onExploreTests={() => handleNavigate('tests-section')}
       />
 
-      {/* 2. Sticky Modern Navbar with PWA & Notification Center */}
-      <Navbar
-        user={studentUser}
-        adminUser={adminUser}
+      {/* 2. Hero Section */}
+      <Hero
+        onViewAllTests={() => handleNavigate('tests-section')}
         onOpenAuth={handleOpenAuth}
-        onLogout={handleStudentLogout}
-        onAdminLogout={handleAdminLogout}
-        onNavigate={handleNavigate}
-        onOpenStudentDashboard={() => {
-          window.location.hash = '#student-dashboard';
-          setCurrentRoute('student-dashboard');
-        }}
-        onOpenAdminDashboard={() => {
-          window.location.hash = '#admin';
-          setCurrentRoute('admin');
-        }}
-        onOpenTeacherLogin={() => {
-          window.location.hash = '#admin';
-          setCurrentRoute('admin');
-        }}
-        activeSection={activeSection}
+        isLoggedIn={!!studentUser?.isLoggedIn}
+        onStartQuickMock={() => setActiveTestForTaking(MOCK_TESTS[0])}
       />
 
-      {/* 3. Main Content Sections */}
-      <main className="flex-1">
-        <Hero
-          onViewAllTests={() => handleNavigate('tests-section')}
-          onOpenAuth={handleOpenAuth}
-          isLoggedIn={!!studentUser?.isLoggedIn}
-          onStartQuickMock={() => setActiveTestForTaking(MOCK_TESTS[0])}
+      {/* 3. Available Online Tests Section */}
+      <section
+        id="tests-section"
+        className="py-12 sm:py-20 max-w-7xl mx-auto px-4 sm:px-6 lg:px-8"
+      >
+        <div className="flex flex-col md:flex-row md:items-end justify-between mb-8 gap-4">
+          <div>
+            <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold bg-violet-950/80 text-violet-300 border border-violet-700/50 mb-2">
+              <BookOpen className="w-3.5 h-3.5" />
+              <span>NTA Standard CBT Series</span>
+            </div>
+            <h2 className="text-2xl sm:text-4xl font-extrabold text-white tracking-tight">
+              Available Online Tests
+            </h2>
+            <p className="text-slate-400 mt-2 text-xs sm:text-base max-w-2xl">
+              100% NCERT Biology tests for NEET &amp; JEE aspirants in Niwari with Section A &amp; Section B NTA timer simulation.
+            </p>
+          </div>
+
+          <div className="inline-flex items-center gap-2 bg-slate-900 px-4 py-2 rounded-2xl border border-slate-800 shadow-xs text-xs font-semibold text-slate-300 shrink-0">
+            <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse" />
+            <span>{allTests.length} Full Tests Ready to Attempt</span>
+          </div>
+        </div>
+
+        {/* Test Filters */}
+        <TestFilter
+          categories={categories}
+          selectedCategory={selectedCategory}
+          onSelectCategory={setSelectedCategory}
+          searchQuery={searchQuery}
+          onSearchChange={setSearchQuery}
+          selectedDifficulty={selectedDifficulty}
+          onSelectDifficulty={setSelectedDifficulty}
+          totalMatches={filteredTests.length}
         />
 
-        {/* Available Online Tests Section */}
-        <section 
-          id="tests-section"
-          className="py-16 sm:py-24 max-w-7xl mx-auto px-4 sm:px-6 lg:px-8"
-        >
-          {/* Section Header */}
-          <div className="flex flex-col md:flex-row md:items-end justify-between mb-8 gap-4">
-            <div>
-              <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold bg-violet-50 text-violet-700 border border-violet-200 mb-2">
-                <BookOpen className="w-3.5 h-3.5" />
-                <span>NTA Standard CBT Series</span>
-              </div>
-              <h2 className="text-3xl sm:text-4xl font-extrabold text-slate-900 tracking-tight">
-                Available Online Tests
-              </h2>
-              <p className="text-slate-600 mt-2 text-sm sm:text-base max-w-2xl">
-                100% NCERT Biology tests for NEET &amp; JEE aspirants in Niwari with Section A &amp; Section B NTA timer simulation.
-              </p>
-            </div>
-
-            {/* Quick Stats Pill */}
-            <div className="inline-flex items-center gap-2 bg-white px-4 py-2 rounded-2xl border border-slate-200 shadow-xs text-xs font-semibold text-slate-600 shrink-0">
-              <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse" />
-              <span>{allTests.length} Full Tests Ready to Attempt</span>
-            </div>
+        {/* Responsive Test Cards Grid */}
+        {filteredTests.length > 0 ? (
+          <div
+            id="available-tests-grid"
+            className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-6 mt-6"
+          >
+            {filteredTests.map((test) => (
+              <TestCard
+                key={test.id}
+                test={test}
+                onStartTest={(t) => setActiveTestForTaking(t)}
+                onViewDetails={(t) => setActiveTestForDetails(t)}
+              />
+            ))}
           </div>
-
-          {/* Test Filters & Search */}
-          <TestFilter
-            categories={categories}
-            selectedCategory={selectedCategory}
-            onSelectCategory={setSelectedCategory}
-            searchQuery={searchQuery}
-            onSearchChange={setSearchQuery}
-            selectedDifficulty={selectedDifficulty}
-            onSelectDifficulty={setSelectedDifficulty}
-            totalMatches={filteredTests.length}
-          />
-
-          {/* Responsive Test Cards Grid */}
-          {filteredTests.length > 0 ? (
-            <div 
-              id="available-tests-grid"
-              className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6"
-            >
-              {filteredTests.map((test) => (
-                <TestCard
-                  key={test.id}
-                  test={test}
-                  onStartTest={(t) => setActiveTestForTaking(t)}
-                  onViewDetails={(t) => setActiveTestForDetails(t)}
-                />
-              ))}
-            </div>
-          ) : (
-            <div className="text-center py-16 bg-white rounded-3xl border border-dashed border-slate-300 p-8">
-              <BookOpen className="w-12 h-12 text-slate-300 mx-auto mb-3" />
-              <h3 className="text-lg font-bold text-slate-700">No tests match your filter</h3>
-              <p className="text-xs sm:text-sm text-slate-500 mt-1 max-w-md mx-auto">
-                Try clearing your search query or selecting &quot;All&quot; categories to view the available NEET &amp; JEE Biology tests.
-              </p>
-              <button
-                onClick={() => {
-                  setSelectedCategory('All');
-                  setSelectedDifficulty('All');
-                  setSearchQuery('');
-                }}
-                className="mt-4 px-4 py-2 bg-violet-600 hover:bg-violet-700 text-white rounded-xl text-xs font-bold cursor-pointer transition-colors"
-              >
-                Reset All Filters
-              </button>
-            </div>
-          )}
-
-          {/* Practice Advice Callout banner */}
-          <div className="mt-12 bg-violet-50/80 rounded-2xl p-6 border border-violet-200/70 flex flex-col sm:flex-row items-center justify-between gap-4">
-            <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-xl bg-violet-600 text-white flex items-center justify-center shrink-0 shadow-md shadow-violet-600/30">
-                <Flame className="w-5 h-5" />
-              </div>
-              <div>
-                <h4 className="text-sm font-bold text-slate-900">Pro Tip from Amerj Sir for NEET 2026:</h4>
-                <p className="text-xs text-slate-600">
-                  Attempt at least 2 full-syllabus Biology tests every week under strict 60-minute time constraints to master speed &amp; accuracy.
-                </p>
-              </div>
-            </div>
+        ) : (
+          <div className="text-center py-16 bg-slate-900/50 rounded-3xl border border-dashed border-slate-800 p-8 mt-6">
+            <BookOpen className="w-12 h-12 text-slate-600 mx-auto mb-3" />
+            <h3 className="text-lg font-bold text-slate-300">No tests match your filter</h3>
+            <p className="text-xs sm:text-sm text-slate-500 mt-1 max-w-md mx-auto">
+              Try clearing your search query or selecting &quot;All&quot; categories to view the available NEET &amp; JEE Biology tests.
+            </p>
             <button
-              onClick={() => setActiveTestForTaking(MOCK_TESTS[0])}
-              className="px-5 py-2.5 bg-white hover:bg-violet-100 text-violet-800 text-xs font-bold rounded-xl border border-violet-300 transition-colors shrink-0 shadow-xs cursor-pointer"
+              onClick={() => {
+                setSelectedCategory('All');
+                setSelectedDifficulty('All');
+                setSearchQuery('');
+              }}
+              className="mt-4 px-4 py-2 bg-violet-600 hover:bg-violet-700 text-white rounded-xl text-xs font-bold cursor-pointer transition-colors"
             >
-              Start Recommended Mock &rarr;
+              Reset All Filters
             </button>
           </div>
-        </section>
+        )}
 
-        {/* Features Section */}
-        <Features />
+        {/* Practice Advice Callout Banner */}
+        <div className="mt-12 bg-gradient-to-r from-violet-950/80 via-slate-900 to-indigo-950/80 rounded-2xl p-5 sm:p-6 border border-violet-800/40 flex flex-col sm:flex-row items-center justify-between gap-4">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-xl bg-violet-600 text-white flex items-center justify-center shrink-0 shadow-md shadow-violet-600/30">
+              <Flame className="w-5 h-5" />
+            </div>
+            <div>
+              <h4 className="text-sm font-bold text-white">Pro Tip from Amerj Sir for NEET 2026:</h4>
+              <p className="text-xs text-slate-400">
+                Attempt at least 2 full-syllabus Biology tests every week under strict 60-minute time constraints to master speed &amp; accuracy.
+              </p>
+            </div>
+          </div>
+          <button
+            onClick={() => setActiveTestForTaking(MOCK_TESTS[0])}
+            className="w-full sm:w-auto px-5 py-2.5 bg-white hover:bg-violet-100 text-violet-950 text-xs font-black rounded-xl transition-colors shrink-0 shadow-xs cursor-pointer"
+          >
+            Start Recommended Mock &rarr;
+          </button>
+        </div>
+      </section>
 
-        {/* About Amerj Sir Institute Section */}
-        <AboutSection />
-      </main>
+      {/* 4. Features Section */}
+      <Features />
 
-      {/* Footer */}
+      {/* 5. About Section */}
+      <AboutSection />
+
+      {/* 6. Footer */}
       <Footer
         onNavigate={handleNavigate}
         onOpenAuth={handleOpenAuth}
       />
 
-      {/* Floating Bottom PWA Install Banner */}
+      {/* Floating Bottom PWA Install Banner (Mobile) */}
       <PwaInstallButton variant="floating" />
 
       {/* Interactive Modals */}
-      {/* 1. Full CBT Test Taking Simulator Modal */}
       {activeTestForTaking && (
         <TestSimulatorModal
           test={activeTestForTaking}
+          user={studentUser}
           onClose={() => setActiveTestForTaking(null)}
         />
       )}
 
-      {/* 2. Test Syllabus & Details Modal */}
       {activeTestForDetails && (
         <TestDetailsModal
           test={activeTestForDetails}
@@ -573,7 +632,6 @@ function MainAppContent() {
         />
       )}
 
-      {/* 3. Student Auth Modal */}
       {authModalOpen && (
         <AuthModal
           isOpen={authModalOpen}
@@ -582,15 +640,16 @@ function MainAppContent() {
           onLoginSuccess={handleLoginSuccess}
         />
       )}
-
-    </div>
+    </Layout>
   );
 }
 
 export default function App() {
   return (
-    <ToastProvider>
-      <MainAppContent />
-    </ToastProvider>
+    <DeviceProvider>
+      <ToastProvider>
+        <MainAppContent />
+      </ToastProvider>
+    </DeviceProvider>
   );
 }

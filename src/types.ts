@@ -3,14 +3,21 @@ export type TestCategory = 'All' | 'NEET Full Syllabus' | 'Class 11 Biology' | '
 
 export interface Question {
   id: number;
-  question: string;
-  options: string[];
+  question?: string;
+  question_en?: string;
+  question_hi?: string;
+  options?: string[];
+  options_en?: string[];
+  options_hi?: string[];
   correctAnswer: number; // 0-indexed
-  explanation: string;
+  explanation?: string;
+  imageUrl?: string | null;
   ncertReference?: string;
   chapter?: string;
   topic?: string;
+  subject?: string;
   difficulty?: Difficulty;
+  type?: 'MCQ' | 'ASSERTION_REASON' | 'MATCHING' | 'STATEMENT';
 }
 
 export interface TestItem {
