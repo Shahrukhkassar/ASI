@@ -104,9 +104,22 @@ export const TeacherAiTools: React.FC<TeacherAiToolsProps> = ({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
       });
-      const data = await res.json();
-      if (!res.ok || data.error) {
-        throw new Error(data.error || 'AI generation failed. Please try again.');
+      
+      const contentType = res.headers.get('content-type') || '';
+      let data: any = null;
+      if (contentType.includes('application/json')) {
+        data = await res.json().catch(() => null);
+      } else {
+        const rawText = await res.text().catch(() => '');
+        try {
+          data = JSON.parse(rawText);
+        } catch {
+          data = { error: `Server response (${res.status}): Please ensure API endpoint is configured.` };
+        }
+      }
+
+      if (!res.ok || data?.error) {
+        throw new Error(data?.error || `AI generation failed (Status: ${res.status}). Please try again.`);
       }
       return data;
     } catch (err: any) {

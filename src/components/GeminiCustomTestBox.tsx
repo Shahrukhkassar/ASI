@@ -287,17 +287,21 @@ export const GeminiCustomTestBox: React.FC<GeminiCustomTestBoxProps> = ({
         })
       });
 
-      if (serverRes.ok) {
-        const data = await serverRes.json();
-        if (data.success && (data.test || data.rawQuestions)) {
+      const serverContentType = serverRes.headers.get('content-type') || '';
+      if (serverRes.ok && serverContentType.includes('application/json')) {
+        const data = await serverRes.json().catch(() => null);
+        if (data && data.success && (data.test || data.rawQuestions)) {
           publishTest(data.test || data.rawQuestions);
           setIsGenerating(false);
           return;
         }
       }
 
-      // If server returned 401 or key missing
-      const serverErrJson = await serverRes.json().catch(() => ({}));
+      // If server returned error or key missing
+      let serverErrJson: any = {};
+      if (serverContentType.includes('application/json')) {
+        serverErrJson = await serverRes.json().catch(() => ({}));
+      }
       if (serverRes.status === 401 || serverErrJson.error?.includes('API Key')) {
         if (!key) {
           throw new Error('API Key missing in Vercel Settings / Environment. Please configure GEMINI_API_KEY or paste key above.');

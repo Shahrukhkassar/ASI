@@ -152,8 +152,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           chatId: telegramConfig.chatId.trim()
         })
       });
-      const data = await res.json();
-      if (res.ok && data.success) {
+      const contentType = res.headers.get('content-type') || '';
+      const data = contentType.includes('application/json') ? await res.json().catch(() => ({})) : {};
+      if (res.ok && data?.success) {
         setTelegramTestStatus({
           status: 'success',
           message: `Bot Connected: @${data.botInfo?.username || 'Bot'} (${data.botInfo?.first_name || 'ASI Bot'})${data.chatVerified ? ' • Test message delivered to chat!' : ''}`
@@ -161,7 +162,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       } else {
         setTelegramTestStatus({
           status: 'error',
-          message: data.error || 'Failed to connect. Check your Bot Token.'
+          message: data?.error || `Failed to connect (Status: ${res.status}). Check your Bot Token.`
         });
       }
     } catch (err: any) {
@@ -185,13 +186,14 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           message: `📢 <b>Amerj Sir Institute Official Announcement:</b>\n\n${broadcastMessage.trim()}\n\n🔗 <i>Attempt live tests on the ASI Portal.</i>`
         })
       });
-      const data = await res.json();
-      if (res.ok && data.success) {
+      const contentType = res.headers.get('content-type') || '';
+      const data = contentType.includes('application/json') ? await res.json().catch(() => ({})) : {};
+      if (res.ok && data?.success) {
         setSuccessNotice('Broadcast delivered to Telegram channel / group successfully!');
         setBroadcastMessage('');
         setTimeout(() => setSuccessNotice(null), 5000);
       } else {
-        alert(data.error || 'Failed to dispatch broadcast.');
+        alert(data?.error || `Failed to dispatch broadcast (Status: ${res.status}).`);
       }
     } catch (err: any) {
       alert(`Broadcast failed: ${err.message}`);
