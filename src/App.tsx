@@ -297,14 +297,20 @@ function MainAppContent() {
   };
 
   const handleLoginSuccess = (userProfile: UserProfile) => {
-    handleSetStudentUser(userProfile);
-    window.location.hash = '#student-dashboard';
-    setCurrentRoute('student-dashboard');
+    if (userProfile.role === 'admin' || userProfile.role === 'teacher') {
+      handleSetAdminUser({ ...userProfile, role: 'admin' });
+      window.location.hash = '#admin';
+      setCurrentRoute('admin');
+    } else {
+      handleSetStudentUser({ ...userProfile, role: 'student' });
+      window.location.hash = '#student-dashboard';
+      setCurrentRoute('student-dashboard');
+    }
   };
 
   // Teacher / Admin Login Success Handler
   const handleAdminLoginSuccess = (adminProfile: UserProfile) => {
-    handleSetAdminUser(adminProfile);
+    handleSetAdminUser({ ...adminProfile, role: 'admin' });
     window.location.hash = '#admin';
     setCurrentRoute('admin');
   };
@@ -332,15 +338,15 @@ function MainAppContent() {
   // ================= ROUTE 1: ADMIN PANEL (PROTECTED) =================
   if (currentRoute === 'admin') {
     return (
-      <ProtectedRoute
-        requiredRole="admin"
-        currentUser={adminUser}
-        onUnauthorized={() => {
-          // Stay on admin hash so TeacherLoginPage shows
-        }}
-      >
-        <Suspense fallback={<RouteLoadingFallback />}>
-          {adminUser && adminUser.isLoggedIn ? (
+      <Suspense fallback={<RouteLoadingFallback />}>
+        {adminUser && adminUser.isLoggedIn ? (
+          <ProtectedRoute
+            requiredRole="admin"
+            currentUser={adminUser}
+            onUnauthorized={() => {
+              window.location.hash = '#admin';
+            }}
+          >
             <Layout
               user={studentUser}
               adminUser={adminUser}
@@ -382,31 +388,31 @@ function MainAppContent() {
                 />
               )}
             </Layout>
-          ) : (
-            <TeacherLoginPage
-              onLoginSuccess={handleAdminLoginSuccess}
-              onGoHome={() => {
-                window.location.hash = '#';
-                setCurrentRoute('home');
-              }}
-            />
-          )}
-        </Suspense>
-      </ProtectedRoute>
+          </ProtectedRoute>
+        ) : (
+          <TeacherLoginPage
+            onLoginSuccess={handleAdminLoginSuccess}
+            onGoHome={() => {
+              window.location.hash = '#';
+              setCurrentRoute('home');
+            }}
+          />
+        )}
+      </Suspense>
     );
   }
 
   // ================= ROUTE 2: STUDENT DASHBOARD (PROTECTED) =================
   if (currentRoute === 'student-dashboard') {
     return (
-      <ProtectedRoute
-        requiredRole="student"
-        currentUser={studentUser}
-        onUnauthorized={() => {
-          handleOpenAuth('login');
-        }}
-      >
-        <Suspense fallback={<RouteLoadingFallback />}>
+      <Suspense fallback={<RouteLoadingFallback />}>
+        <ProtectedRoute
+          requiredRole="student"
+          currentUser={studentUser}
+          onUnauthorized={() => {
+            handleOpenAuth('login');
+          }}
+        >
           <Layout
             user={studentUser}
             adminUser={adminUser}
@@ -466,8 +472,16 @@ function MainAppContent() {
               />
             )}
           </Layout>
-        </Suspense>
-      </ProtectedRoute>
+        </ProtectedRoute>
+        {authModalOpen && (
+          <AuthModal
+            isOpen={authModalOpen}
+            initialMode={authMode}
+            onClose={() => setAuthModalOpen(false)}
+            onLoginSuccess={handleLoginSuccess}
+          />
+        )}
+      </Suspense>
     );
   }
 
