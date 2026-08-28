@@ -45,12 +45,33 @@ interface ChatMessage {
 /**
  * KaTeX Formula & Markdown Formatter
  */
-const MathAndMarkdownRenderer: React.FC<{ content: string; className?: string }> = ({ content, className = '' }) => {
+const MathAndMarkdownRenderer: React.FC<{ content: any; className?: string }> = ({ content, className = '' }) => {
   const renderedContent = useMemo(() => {
     if (!content) return [];
 
+    let safeContent = '';
+    if (typeof content === 'string') {
+      safeContent = content;
+    } else if (typeof content === 'number' || typeof content === 'boolean') {
+      safeContent = String(content);
+    } else if (typeof content === 'object') {
+      try {
+        safeContent = content.text || content.message || content.content || JSON.stringify(content);
+      } catch {
+        safeContent = Object.prototype.toString.call(content);
+      }
+    } else {
+      try {
+        safeContent = String(content);
+      } catch {
+        safeContent = '';
+      }
+    }
+
+    if (!safeContent) return [];
+
     // Split by block equations $$...$$ and inline equations $...$
-    const parts = content.split(/(\$\$[\s\S]*?\$\$|\$[^\$\n]+\$)/g);
+    const parts = safeContent.split(/(\$\$[\s\S]*?\$\$|\$[^\$\n]+\$)/g);
 
     return parts.map((part, index) => {
       if (part.startsWith('$$') && part.endsWith('$$')) {

@@ -195,7 +195,7 @@ export const Layout: React.FC<LayoutProps> = ({
         </header>
 
         {/* Scrollable Content Body with bottom margin for Bottom Nav */}
-        <main className="flex-1 pb-[76px] overflow-y-auto overscroll-y-contain">
+        <main className="flex-1 pb-[76px] scroll-area">
           {children}
         </main>
 

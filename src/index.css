@@ -5,9 +5,10 @@
 html, body {
   height: 100%;
   width: 100%;
-  overflow: hidden; /* Important - body scroll band */
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
   overscroll-behavior: none;
-  position: fixed;
   -webkit-overflow-scrolling: touch;
 }
 #root {

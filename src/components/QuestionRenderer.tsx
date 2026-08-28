@@ -46,10 +46,39 @@ export interface QuestionRendererProps {
 /**
  * Robust Text Cleanup function for messy Excel imports, tags, entities, and linebreaks
  */
-export function cleanQuestionText(rawText?: string): string {
-  if (!rawText) return '';
+export function cleanQuestionText(rawText?: any): string {
+  if (rawText === null || rawText === undefined) return '';
 
-  let text = rawText;
+  let text = '';
+  if (typeof rawText === 'string') {
+    text = rawText;
+  } else if (typeof rawText === 'number' || typeof rawText === 'boolean') {
+    text = String(rawText);
+  } else if (typeof rawText === 'object') {
+    try {
+      if (typeof rawText.text === 'string') {
+        text = rawText.text;
+      } else if (typeof rawText.question === 'string') {
+        text = rawText.question;
+      } else if (typeof rawText.en === 'string') {
+        text = rawText.en;
+      } else if (typeof rawText.hi === 'string') {
+        text = rawText.hi;
+      } else {
+        text = JSON.stringify(rawText);
+      }
+    } catch {
+      text = Object.prototype.toString.call(rawText);
+    }
+  } else {
+    try {
+      text = String(rawText);
+    } catch {
+      text = '';
+    }
+  }
+
+  if (!text) return '';
 
   // 1. Remove HTML tags like <p>, </p>, <br/>, <div>, <span>, <b>, <i>, &nbsp;
   text = text
@@ -113,7 +142,7 @@ function parseAssertionReason(text: string): AssertionReasonData {
  * KaTeX Formula & Math Parser Component
  * Supports: $formula$, $$formula$$, \(formula\), \[formula\]
  */
-export const MathText: React.FC<{ text: string; className?: string; isHindi?: boolean }> = ({
+export const MathText: React.FC<{ text: any; className?: string; isHindi?: boolean }> = ({
   text,
   className = '',
   isHindi = false
@@ -121,8 +150,29 @@ export const MathText: React.FC<{ text: string; className?: string; isHindi?: bo
   const parts = useMemo(() => {
     if (!text) return [];
 
+    let stringText = '';
+    if (typeof text === 'string') {
+      stringText = text;
+    } else if (typeof text === 'number' || typeof text === 'boolean') {
+      stringText = String(text);
+    } else if (typeof text === 'object') {
+      try {
+        stringText = text.text || text.question || text.en || text.hi || JSON.stringify(text);
+      } catch {
+        stringText = '';
+      }
+    } else {
+      try {
+        stringText = String(text);
+      } catch {
+        stringText = '';
+      }
+    }
+
+    if (!stringText) return [];
+
     // Normalize LaTeX delimiters \(...\) to $...$ and \[...\] to $$...$$
-    let normalized = text
+    let normalized = stringText
       .replace(/\\\(([\s\S]*?)\\\)/g, '$$$1$$')
       .replace(/\\\[([\s\S]*?)\\\]/g, '$$$$$1$$$$');
 
